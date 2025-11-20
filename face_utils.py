@@ -1,6 +1,10 @@
 import cv2
 import numpy as np
-from deepface import DeepFace
+from insightface.app import FaceAnalysis
+
+# Initialize InsightFace
+face_app = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
+face_app.prepare(ctx_id=0, det_size=(640, 640))
 
 def load_image_from_bytes(image_bytes):
     arr = np.frombuffer(image_bytes, np.uint8)
@@ -8,35 +12,32 @@ def load_image_from_bytes(image_bytes):
     return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
 def get_face_embedding(img_rgb):
-    """Return embedding vector (list of floats)."""
-    try:
-        embedding = DeepFace.represent(img_rgb, model_name="Facenet", enforce_detection=False)
-        if embedding:
-            return embedding[0]["embedding"]
-    except:
+    faces = face_app.get(img_rgb)
+    if len(faces) == 0:
         return None
-
-def compare_embeddings(e1, e2, threshold=0.6):
-    """Return True if match."""
-    dist = np.linalg.norm(np.array(e1) - np.array(e2))
-    return dist < threshold, float(dist)
+    return faces[0].normed_embedding.tolist()
 
 def find_faces_in_image(img_rgb):
-    """Returns list of embeddings and bounding boxes."""
-    faces = []
-    try:
-        detections = DeepFace.extract_faces(img_rgb, enforce_detection=False)
-        for det in detections:
-            emb = det["embedding"]
-            box = det["facial_area"]  # x,y,w,h
-            faces.append((emb, box))
-    except:
-        pass
-    return faces
+    """
+    Returns list: (embedding, bounding box)
+    """
+    faces = face_app.get(img_rgb)
+    out = []
+    for f in faces:
+        emb = f.normed_embedding.tolist()
+        box = f.bbox.astype(int).tolist()  # [x1,y1,x2,y2]
+        out.append((emb, box))
+    return out
+
+def cosine_similarity(a, b):
+    a = np.array(a)
+    b = np.array(b)
+    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
 def draw_boxes(img_rgb, boxes, labels):
-    copy = img_rgb.copy()
-    for (x, y, w, h), name in zip(boxes, labels):
-        cv2.rectangle(copy, (x,y), (x+w, y+h), (0,255,0), 2)
-        cv2.putText(copy, name, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
-    return copy
+    img = img_rgb.copy()
+    for (x1, y1, x2, y2), name in zip(boxes, labels):
+        cv2.rectangle(img, (x1, y1), (x2, y2), (0,255,0), 2)
+        cv2.putText(img, name, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6, (0,255,0), 2)
+    return img

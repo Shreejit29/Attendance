@@ -1,242 +1,264 @@
-# utils.py
-from deepface import DeepFace
-from PIL import Image
+# utils.py — TF-free utilities for Smart Attendance App
+# Avoids TensorFlow + RetinaFace. Uses PyTorch-based DeepFace backends.
+#
+# Supported detector_backends: mtcnn, opencv, ssd, dlib
+# Supported models: Facenet, Facenet512, ArcFace, VGG-Face, SFace
+
 import os
 import numpy as np
 import pandas as pd
-import faiss
+from PIL import Image
+import cv2
+from deepface import DeepFace
 from sklearn.cluster import DBSCAN
-import io
-import base64
 
-# -------------------------------------------------------
+# -------------------------------------------
 # Paths
-# -------------------------------------------------------
+# -------------------------------------------
 DB_PATH = "student_db"
-METADATA_CSV = "student_db/metadata.csv"
-EMBEDDING_CSV = "student_db/embeddings.npz"
+META_CSV = os.path.join(DB_PATH, "metadata.csv")
+EMB_NPZ = os.path.join(DB_PATH, "embeddings.npz")
 
 os.makedirs(DB_PATH, exist_ok=True)
 
-# -------------------------------------------------------
-# Student Enrollment & Metadata
-# -------------------------------------------------------
+# -------------------------------------------
+# ENROLLMENT
+# -------------------------------------------
 
-def enroll_student(student_id: str, name: str, image_path: str, compute_embedding: bool = True):
+def enroll_student(student_id: str, name: str, image_path: str):
     """
-    Saves the student image and updates metadata.
+    Save student image and update metadata.
     """
     filename = f"{student_id}__{name.replace(' ', '_')}.jpg"
     dest = os.path.join(DB_PATH, filename)
 
-    img = Image.open(image_path).convert("RGB")
-    img.save(dest)
+    Image.open(image_path).convert("RGB").save(dest)
 
-    # metadata update
-    if os.path.exists(METADATA_CSV):
-        meta = pd.read_csv(METADATA_CSV)
+    # Update metadata
+    if os.path.exists(META_CSV):
+        meta = pd.read_csv(META_CSV)
     else:
         meta = pd.DataFrame(columns=["student_id", "name", "filename", "mandatory"])
 
-    meta = meta[meta.student_id != student_id]
+    meta = meta[meta["student_id"] != str(student_id)]
     meta = pd.concat([
         meta,
         pd.DataFrame([{
-            "student_id": student_id,
+            "student_id": str(student_id),
             "name": name,
             "filename": filename,
             "mandatory": False
         }])
     ], ignore_index=True)
-    meta.to_csv(METADATA_CSV, index=False)
 
-    if compute_embedding:
-        rebuild_embeddings_index()
+    meta.to_csv(META_CSV, index=False)
+
+    # Rebuild embeddings
+    rebuild_embeddings_index()
 
     return dest
 
 
 def list_students():
-    if os.path.exists(METADATA_CSV):
-        return pd.read_csv(METADATA_CSV)
+    if os.path.exists(META_CSV):
+        return pd.read_csv(META_CSV)
     return pd.DataFrame(columns=["student_id", "name", "filename", "mandatory"])
 
 
-def set_mandatory(student_id: str, value: bool = True):
-    meta = list_students()
-    if student_id in meta.student_id.values:
-        meta.loc[meta.student_id == student_id, "mandatory"] = value
-        meta.to_csv(METADATA_CSV, index=False)
+def set_mandatory(student_id: str, value: bool):
+    df = list_students()
+    if student_id in df["student_id"].values:
+        df.loc[df["student_id"] == student_id, "mandatory"] = value
+        df.to_csv(META_CSV, index=False)
         return True
     return False
 
+# -------------------------------------------
+# EMBEDDINGS (NO TENSORFLOW)
+# -------------------------------------------
 
-# -------------------------------------------------------
-# Embeddings + FAISS Index
-# -------------------------------------------------------
+def compute_embedding(image_path, model_name="Facenet", detector_backend="mtcnn"):
+    """
+    Compute embedding using DeepFace.represent (Torch models).
+    """
+    try:
+        rep = DeepFace.represent(
+            img_path=image_path,
+            model_name=model_name,
+            detector_backend=detector_backend,
+            enforce_detection=False   # avoid hard crashes
+        )
+        return np.array(rep)
+    except Exception:
+        return None
 
-def compute_embedding(img_path: str, model_name="Facenet", detector_backend="mtcnn"):
-    emb = DeepFace.represent(
-        img_path=img_path,
-        model_name=model_name,
-        detector_backend=detector_backend
-    )
-    return np.array(emb)
 
-
-def rebuild_embeddings_index(model_name="Facenet", detector_backend="mtcnn"):
-    meta = list_students()
+def rebuild_embeddings_index(model="Facenet", detector="mtcnn"):
+    df = list_students()
     embeddings = []
     ids = []
 
-    for _, r in meta.iterrows():
-        path = os.path.join(DB_PATH, r["filename"])
+    for _, row in df.iterrows():
+        path = os.path.join(DB_PATH, row["filename"])
         if os.path.exists(path):
-            emb = compute_embedding(path, model_name, detector_backend)
-            embeddings.append(emb)
-            ids.append(str(r["student_id"]))
+            emb = compute_embedding(path, model_name=model, detector_backend=detector)
+            if emb is not None:
+                embeddings.append(emb)
+                ids.append(str(row["student_id"]))
 
-    if len(embeddings) == 0:
-        if os.path.exists(EMBEDDING_CSV):
-            os.remove(EMBEDDING_CSV)
-        return None
-
-    embeddings = np.vstack(embeddings).astype("float32")
-    d = embeddings.shape[1]
-    index = faiss.IndexFlatL2(d)
-    index.add(embeddings)
-
-    np.savez(EMBEDDING_CSV, embeddings=embeddings, ids=np.array(ids))
-    faiss.write_index(index, EMBEDDING_CSV + ".index")
-
-    return True
+    if len(embeddings) > 0:
+        np.savez(EMB_NPZ, embeddings=np.vstack(embeddings), ids=np.array(ids))
+    else:
+        if os.path.exists(EMB_NPZ):
+            os.remove(EMB_NPZ)
 
 
 def load_embeddings_index():
-    if not os.path.exists(EMBEDDING_CSV):
-        return None, None, None
-
-    arr = np.load(EMBEDDING_CSV, allow_pickle=True)
-    embeddings = arr["embeddings"].astype("float32")
-    ids = arr["ids"].astype("U")
-
-    index_file = EMBEDDING_CSV + ".index"
-    if os.path.exists(index_file):
-        index = faiss.read_index(index_file)
-    else:
-        d = embeddings.shape[1]
-        index = faiss.IndexFlatL2(d)
-        index.add(embeddings)
-
-    return index, embeddings, ids
-
-
-def match_embedding(embedding, index, ids, top_k=1, threshold=0.8):
-    if index is None:
+    if not os.path.exists(EMB_NPZ):
         return None, None
 
-    D, I = index.search(embedding.reshape(1, -1).astype("float32"), top_k)
-    dist = float(D[0][0])
-    idx = int(I[0][0])
+    data = np.load(EMB_NPZ, allow_pickle=True)
+    return data["embeddings"], data["ids"]
 
-    if dist <= threshold:
-        return ids[idx], dist
-    return None, dist
+# -------------------------------------------
+# MATCHING (cosine distance)
+# -------------------------------------------
+
+def cosine_distance(a, b):
+    if a is None or b is None:
+        return 999
+    a = a.astype(float)
+    b = b.astype(float)
+    return 1 - np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-10)
 
 
-# -------------------------------------------------------
-# Video frame extraction
-# -------------------------------------------------------
+def match_embedding(embedding, embeddings_db, ids_db, threshold=0.6):
+    if embeddings_db is None:
+        return None, None
 
-def extract_frames_from_video(video_path, sample_rate=10):
-    import cv2
-    cap = cv2.VideoCapture(video_path)
+    best_id = None
+    best_dist = 999
+
+    for db_emb, sid in zip(embeddings_db, ids_db):
+        d = cosine_distance(embedding, db_emb)
+        if d < best_dist:
+            best_dist = d
+            best_id = sid
+
+    if best_dist <= threshold:
+        return best_id, best_dist
+    return None, best_dist
+
+# -------------------------------------------
+# FRAME EXTRACTION
+# -------------------------------------------
+
+def extract_frames_from_video(video_path, sample_rate=8):
     frames = []
-    count = 0
+    cap = cv2.VideoCapture(video_path)
 
+    count = 0
     while True:
         ret, frame = cap.read()
         if not ret:
             break
         if count % sample_rate == 0:
-            frames.append(frame.copy())
+            frames.append(frame)
         count += 1
+
     cap.release()
     return frames
 
+# -------------------------------------------
+# FACE EXTRACTION + EMBEDDING PER FRAME
+# -------------------------------------------
 
 def process_frames_for_faces(frames, model_name="Facenet", detector_backend="mtcnn"):
+    """
+    Process list of frames:
+    - detect faces using DeepFace.extract_faces
+    - compute embedding for each cropped face
+    """
     out = []
-    import tempfile
 
-    for i, f in enumerate(frames):
-        rgb = f[:, :, ::-1]
-        tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
-        Image.fromarray(rgb).save(tmp.name)
+    for idx, frame in enumerate(frames):
+        rgb = frame[:, :, ::-1]  # BGR → RGB
+        # save temporary
+        tmp_path = f"tmp_face_{time.time()}_{idx}.jpg"
+        Image.fromarray(rgb).save(tmp_path)
 
         try:
-            faces = DeepFace.extract_faces(img_path=tmp.name, detector_backend=detector_backend)
+            faces = DeepFace.extract_faces(
+                img_path=tmp_path,
+                detector_backend=detector_backend,
+                enforce_detection=False
+            )
         except:
             faces = []
 
-        for face in faces:
-            crop = face.get("face")
-            tmp2 = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
-            Image.fromarray(crop).save(tmp2.name)
+        for fc in faces:
+            crop = fc["face"]
+            # save crop temporarily
+            crop_path = f"tmp_crop_{time.time()}_{idx}.jpg"
+            Image.fromarray(crop).save(crop_path)
 
-            emb = compute_embedding(tmp2.name, model_name, detector_backend)
-            out.append({"frame_idx": i, "embedding": emb})
+            emb = compute_embedding(
+                crop_path,
+                model_name=model_name,
+                detector_backend=detector_backend
+            )
+
+            if emb is not None:
+                out.append({"frame_idx": idx, "embedding": emb})
+
+            try:
+                os.remove(crop_path)
+            except:
+                pass
+
+        try:
+            os.remove(tmp_path)
+        except:
+            pass
 
     return out
 
-
-# -------------------------------------------------------
-# Deduplication & Unknown Face Clustering
-# -------------------------------------------------------
+# -------------------------------------------
+# DEDUPLICATION
+# -------------------------------------------
 
 def deduplicate_matches(matches, similarity_threshold=0.6):
     unique = {}
     for m in matches:
-        sid = m.get("student_id")
-        if sid:
-            if sid not in unique:
-                unique[sid] = m
-        else:
-            emb = m["embedding"]
-            placed = False
-            for k, v in unique.items():
-                if "embedding" in v:
-                    d = np.linalg.norm(v["embedding"] - emb)
-                    if d <= similarity_threshold:
-                        placed = True
-                        break
-            if not placed:
-                unique[f"unknown_{len(unique)}"] = m
+        sid = m["student_id"]
+        if sid not in unique:
+            unique[sid] = m
     return list(unique.values())
 
+# -------------------------------------------
+# UNKNOWN FACE CLUSTERING
+# -------------------------------------------
 
-def cluster_unknown_embeddings(embeddings, eps=0.8, min_samples=2):
-    if len(embeddings) == 0:
+def cluster_unknown_embeddings(emb_list, eps=0.8, min_samples=2):
+    if len(emb_list) == 0:
         return []
 
-    X = np.vstack(embeddings).astype("float32")
-    clustering = DBSCAN(eps=eps, min_samples=min_samples).fit(X)
-    labels = clustering.labels_
+    X = np.vstack(emb_list).astype("float32")
+    db = DBSCAN(eps=eps, min_samples=min_samples, metric="euclidean").fit(X)
+    labels = db.labels_
 
     clusters = {}
-    for i, l in enumerate(labels):
-        clusters.setdefault(l, []).append(i)
-
+    for i, label in enumerate(labels):
+        clusters.setdefault(label, []).append(i)
     return clusters
 
-
-# -------------------------------------------------------
-# Attendance Sheet
-# -------------------------------------------------------
+# -------------------------------------------
+# ATTENDANCE DF
+# -------------------------------------------
 
 def generate_attendance(metadata_df, matched_records):
-    matched_ids = [m["student_id"] for m in matched_records if m.get("student_id")]
-    distances = {m["student_id"]: m.get("distance") for m in matched_records if m.get("student_id")}
+    matched_ids = [m["student_id"] for m in matched_records]
+    dist_map = {m["student_id"]: m["distance"] for m in matched_records}
 
     rows = []
     for _, r in metadata_df.iterrows():
@@ -247,23 +269,7 @@ def generate_attendance(metadata_df, matched_records):
             "name": r["name"],
             "mandatory": bool(r["mandatory"]),
             "status": "Present" if present else "Absent",
-            "distance": distances.get(sid)
+            "distance": dist_map.get(sid)
         })
 
     return pd.DataFrame(rows)
-
-
-# -------------------------------------------------------
-# QR Backup (base64 CSV → QR)
-# -------------------------------------------------------
-
-def csv_to_qr_image(df):
-    import qrcode
-    csv_bytes = df.to_csv(index=False).encode("utf-8")
-    b64 = base64.b64encode(csv_bytes).decode("utf-8")
-
-    qr = qrcode.make(b64)
-    buf = io.BytesIO()
-    qr.save(buf, format="PNG")
-    buf.seek(0)
-    return buf

@@ -1,292 +1,258 @@
-# app.py  — Streamlit UI for Smart Attendance App
+# app.py — Smart Attendance (TF-free) using DeepFace + Streamlit
+# Features:
+# - Enrollment (upload + camera)
+# - Attendance: photo or video sampling
+# - Real-time-like video processing
+# - Unknown face clustering
+# - No QR export, No TensorFlow usage
+# - Detector backend: mtcnn/opencv/ssd (NO RetinaFace)
+# - Embedding models: Facenet, ArcFace, VGG-Face, Facenet512
 
 import streamlit as st
 from PIL import Image
-import pandas as pd
 import numpy as np
 import io
 import os
+import time
 
-# Import all helpers from utils.py
 from utils import (
-    enroll_student, list_students, set_mandatory,
-    rebuild_embeddings_index, load_embeddings_index,
-    extract_frames_from_video, process_frames_for_faces,
-    match_embedding, deduplicate_matches,
-    cluster_unknown_embeddings, generate_attendance,
-    csv_to_qr_image
+    enroll_student,
+    list_students,
+    set_mandatory,
+    rebuild_embeddings_index,
+    load_embeddings_index,
+    extract_frames_from_video,
+    process_frames_for_faces,
+    match_embedding,
+    deduplicate_matches,
+    cluster_unknown_embeddings,
+    generate_attendance
 )
 
-# ------------------------------------------------------------
-# Streamlit Page Settings
-# ------------------------------------------------------------
+os.makedirs("student_db", exist_ok=True)
 
-st.set_page_config(
-    page_title="Smart Attendance (DeepFace)",
-    layout="wide"
-)
-
-st.title("📚 Smart Classroom Attendance — DeepFace + Streamlit")
+st.set_page_config(page_title="Smart Attendance (TF-free)", layout="wide")
+st.title("Smart Attendance — DeepFace (TF-Free Deployment)")
 
 menu = st.sidebar.selectbox(
     "Navigation",
     ["Home", "Enrollment", "Manage Students", "Take Attendance (Photo/Video)", "Real-time Video Processing"]
 )
 
-st.markdown("""
-<style>
-.big-btn > button {padding: 14px 24px; font-size: 18px !important}
-</style>
-""", unsafe_allow_html=True)
-
-
-# ------------------------------------------------------------
-# Home Page
-# ------------------------------------------------------------
-
+# ---------------------------------------------------------
+# HOME
+# ---------------------------------------------------------
 if menu == "Home":
-    st.header("Welcome 👋")
-    st.write("""
-    This application uses **DeepFace** for smart facial-recognition-based attendance.
-    
-    Features included:
-    - Student enrollment with **upload or camera**
-    - Attendance using **photo** or **video**
-    - **Automatic frame sampling** from videos
-    - **Precomputed embeddings** + **FAISS** for fast matching
-    - **Unknown face clustering**
-    - **QR Backup** of attendance
-    - Mobile friendly interface
-    """)
+    st.header("Welcome")
+    st.markdown("""
+### This is a TensorFlow-free Smart Attendance System
 
-    st.info("Note: On first run, DeepFace will download pretrained model weights.")
+It supports:
+- 📸 **Enrollment** (Upload or Camera)
+- 🖼 **Attendance from PHOTO**
+- 🎥 **Attendance from VIDEO** (sampled frames)
+- ⚡ **Real-time-like server-side video processing**
+- 🤨 **Unknown face grouping (clustering)**  
+- 💡 **Fully TF-free — avoids all TensorFlow / Keras / RetinaFace errors**
 
+You just need to:
+1. Enroll students  
+2. Upload a photo or video of classroom  
+3. Download attendance Excel  
+""")
 
-# ------------------------------------------------------------
-# Student Enrollment
-# ------------------------------------------------------------
-
+# ---------------------------------------------------------
+# ENROLLMENT
+# ---------------------------------------------------------
 if menu == "Enrollment":
-    st.header("👤 Enroll Student")
+    st.header("Enroll a Student")
 
     sid = st.text_input("Student ID")
     name = st.text_input("Full Name")
-
     uploaded_img = st.file_uploader("Upload Photo", type=["jpg", "jpeg", "png"])
-    cam_img = st.camera_input("Or Capture Using Camera")
+    cam_img = st.camera_input("Or capture using camera")
 
-    if st.button("Enroll Student", key="enroll-btn"):
+    if st.button("Enroll Student"):
         if not sid or not name or (uploaded_img is None and cam_img is None):
-            st.warning("Please fill all fields and provide a photo.")
+            st.warning("Please enter Student ID, Name, and a Photo.")
         else:
             src = uploaded_img if uploaded_img is not None else cam_img
-
-            with open(f"tmp_{sid}.jpg", "wb") as f:
+            tmp_path = f"tmp_en_{time.time()}.jpg"
+            with open(tmp_path, "wb") as f:
                 f.write(src.getbuffer())
 
-            enroll_student(sid, name, f"tmp_{sid}.jpg")
-            os.remove(f"tmp_{sid}.jpg")
+            enroll_student(sid, name, tmp_path)
+            os.remove(tmp_path)
 
-            st.success(f"Successfully enrolled {name} ({sid}). Updating embeddings...")
+            st.success(f"Enrolled {name} ({sid}). Rebuilding embeddings…")
+            rebuild_embeddings_index()
+            st.success("Embeddings updated successfully.")
 
-            with st.spinner("Rebuilding embedding index..."):
-                rebuild_embeddings_index()
-
-            st.success("Embeddings updated!")
-
-
-# ------------------------------------------------------------
-# Manage Students
-# ------------------------------------------------------------
-
+# ---------------------------------------------------------
+# MANAGE STUDENTS
+# ---------------------------------------------------------
 if menu == "Manage Students":
-    st.header("🧾 Student Database")
+    st.header("Manage Students")
 
     df = list_students()
-    st.dataframe(df)
+    if df.empty:
+        st.info("No students enrolled yet.")
+    else:
+        st.dataframe(df)
+        st.subheader("Mandatory Student Selection")
 
-    st.subheader("Mark Mandatory Students")
+        updated = False
+        for _, r in df.iterrows():
+            sid = r["student_id"]
+            cur = bool(r["mandatory"])
+            new = st.checkbox(f"{sid} — {r['name']}", value=cur)
+            if new != cur:
+                set_mandatory(sid, new)
+                updated = True
 
-    for _, row in df.iterrows():
-        sid = row["student_id"]
-        name = row["name"]
-        flag = bool(row["mandatory"])
-
-        updated = st.checkbox(f"{sid} — {name}", value=flag)
-
-        if updated != flag:
-            set_mandatory(sid, updated)
+        if updated:
+            st.success("Mandatory list updated.")
             st.experimental_rerun()
 
-
-# ------------------------------------------------------------
-# Take Attendance from Photo / Video
-# ------------------------------------------------------------
-
+# ---------------------------------------------------------
+# TAKE ATTENDANCE
+# ---------------------------------------------------------
 if menu == "Take Attendance (Photo/Video)":
-    st.header("📸 Take Attendance (Photo or Video)")
+    st.header("Take Attendance — Photo or Video")
 
     uploaded_img = st.file_uploader("Upload Class Photo", type=["jpg", "jpeg", "png"])
-    video_file = st.file_uploader("Or Upload Class Video", type=["mp4", "mov"])
-    cam_img = st.camera_input("Or Capture Photo Using Camera")
+    cam_img = st.camera_input("Or capture class photo")
+    video_file = st.file_uploader("Or upload class video", type=["mp4", "mov"])
 
-    source_img_path = None
+    detector_choice = st.selectbox("Face Detector", ["mtcnn", "opencv", "ssd"])
+    model_choice = st.selectbox("Embedding Model", ["Facenet", "ArcFace", "VGG-Face", "Facenet512"])
+    sample_rate = st.number_input("Video Sampling Rate (every N frames)", 1, 30, 8)
 
-    # Priority: photo upload > camera > video frame
+    source_path = None
+    video_frames = None
+
+    # PHOTO INPUT
     if uploaded_img:
-        with open("tmp_class.jpg", "wb") as f:
+        source_path = f"tmpclass_{time.time()}.jpg"
+        with open(source_path, "wb") as f:
             f.write(uploaded_img.getbuffer())
-        source_img_path = "tmp_class.jpg"
-        st.image(uploaded_img, caption="Uploaded Class Photo", use_column_width=True)
+        st.image(uploaded_img, caption="Uploaded Photo", use_column_width=True)
 
     elif cam_img:
-        with open("tmp_cam_class.jpg", "wb") as f:
+        source_path = f"tmpcamclass_{time.time()}.jpg"
+        with open(source_path, "wb") as f:
             f.write(cam_img.getbuffer())
-        source_img_path = "tmp_cam_class.jpg"
-        st.image(cam_img, caption="Captured Image", use_column_width=True)
+        st.image(cam_img, caption="Captured Photo", use_column_width=True)
 
+    # VIDEO INPUT
     elif video_file:
-        with open("tmp_video.mp4", "wb") as f:
+        tmpvid = f"tmpvideo_{time.time()}.mp4"
+        with open(tmpvid, "wb") as f:
             f.write(video_file.getbuffer())
 
-        st.info("Extracting frames from video...")
-        frames = extract_frames_from_video("tmp_video.mp4", sample_rate=8)
+        st.info("Extracting frames from video…")
+        video_frames = extract_frames_from_video(tmpvid, sample_rate)
+        os.remove(tmpvid)
 
-        if len(frames) == 0:
-            st.error("Could not extract frames from video.")
+        if len(video_frames) == 0:
+            st.error("No frames extracted — video may be corrupted.")
         else:
-            mid_frame = frames[len(frames) // 2][:, :, ::-1]
-            st.image(mid_frame, caption="Sampled Frame", use_column_width=True)
+            st.success(f"Extracted {len(video_frames)} frames.")
+            sample_img = video_frames[len(video_frames)//2][:,:,::-1]
+            st.image(sample_img, caption="Example extracted frame")
 
-            with st.spinner("Detecting faces across frames..."):
-                face_records = process_frames_for_faces(frames)
+    # RUN RECOGNITION
+    if (source_path or video_frames) and st.button("Run Attendance"):
+        index, embeddings, ids = load_embeddings_index()
+        meta = list_students()
 
-            st.success(f"Detected {len(face_records)} face crops from sampled frames.")
+        if meta.empty:
+            st.warning("No students enrolled.")
+        else:
+            # PROCESS SINGLE PHOTO
+            if source_path:
+                img = Image.open(source_path).convert("RGB")
+                arr = np.array(img)[:, :, ::-1]
+                recs = process_frames_for_faces([arr], model_choice, detector_choice)
+                os.remove(source_path)
+            else:
+                recs = process_frames_for_faces(video_frames, model_choice, detector_choice)
 
-            # Load FAISS index
-            index, embeddings, ids = load_embeddings_index()
             matched = []
             unknown_embs = []
 
-            for rec in face_records:
-                sid, dist = match_embedding(rec["embedding"], index, ids, threshold=0.8)
+            for r in recs:
+                emb = r.get("embedding")
+                if emb is None:
+                    continue
+                sid, dist = match_embedding(emb, index, ids, threshold=0.6)
                 if sid:
                     matched.append({"student_id": sid, "distance": dist})
                 else:
-                    unknown_embs.append(rec["embedding"])
+                    unknown_embs.append(emb)
 
-            matched = deduplicate_matches(matched)
+            matched_unique = deduplicate_matches(matched)
             clusters = cluster_unknown_embeddings(unknown_embs)
+            att_df = generate_attendance(meta, matched_unique)
 
-            meta = list_students()
-            att_df = generate_attendance(meta, matched)
-
-            st.subheader("Attendance Sheet")
+            st.subheader("Attendance Result")
             st.dataframe(att_df)
 
-            # Download Excel
             buf = io.BytesIO()
             att_df.to_excel(buf, index=False)
             buf.seek(0)
-
             st.download_button("Download Attendance Excel", buf, file_name="attendance.xlsx")
 
-            # QR Backup
-            qr_buf = csv_to_qr_image(att_df)
-            st.image(qr_buf, caption="QR Backup")
+            st.info(f"Matched students: {len(matched_unique)}")
+            st.info(f"Unknown face clusters: {len(clusters)}")
 
-            st.download_button("Download QR Backup", qr_buf, file_name="attendance_qr.png")
-
-    # PHOTO MODE: Recognize from a single image
-    if source_img_path and st.button("Run Attendance"):
-        index, embeddings, ids = load_embeddings_index()
-        frames = [np.array(Image.open(source_img_path))[:, :, ::-1]]
-
-        with st.spinner("Processing image..."):
-            face_records = process_frames_for_faces(frames)
-
-        matched = []
-        unknown_embs = []
-
-        for rec in face_records:
-            sid, dist = match_embedding(rec["embedding"], index, ids, threshold=0.8)
-
-            if sid:
-                matched.append({"student_id": sid, "distance": dist})
-            else:
-                unknown_embs.append(rec["embedding"])
-
-        matched = deduplicate_matches(matched)
-        clusters = cluster_unknown_embeddings(unknown_embs)
-
-        meta = list_students()
-        att_df = generate_attendance(meta, matched)
-
-        st.subheader("Attendance Sheet")
-        st.dataframe(att_df)
-
-        buffer = io.BytesIO()
-        att_df.to_excel(buffer, index=False)
-        buffer.seek(0)
-
-        st.download_button("Download Excel", buffer, file_name="attendance.xlsx")
-
-        qr_buf = csv_to_qr_image(att_df)
-        st.image(qr_buf, caption="QR Backup")
-        st.download_button("Download QR", qr_buf, file_name="attendance_qr.png")
-
-
-# ------------------------------------------------------------
-# Real-time-like Video Processing
-# ------------------------------------------------------------
-
+# ---------------------------------------------------------
+# REAL-TIME VIDEO PROCESSING
+# ---------------------------------------------------------
 if menu == "Real-time Video Processing":
-    st.header("🎥 Real-time Video Processing (Server-Side)")
+    st.header("Real-time-like Video Processing")
 
-    video_file = st.file_uploader("Upload Classroom Video", type=["mp4", "mov"])
+    video_file = st.file_uploader("Upload classroom video", type=["mp4", "mov"])
 
     if video_file:
-        with open("tmp_rt.mp4", "wb") as f:
+        tmpvid = f"tmp_rt_{time.time()}.mp4"
+        with open(tmpvid, "wb") as f:
             f.write(video_file.getbuffer())
 
-        st.info("Sampling video frames...")
-        frames = extract_frames_from_video("tmp_rt.mp4", sample_rate=5)
-
-        st.write(f"Processing {len(frames)} frames...")
+        sample_rate = st.number_input("Sampling rate (1 = every frame)", 1, 30, 6)
+        st.info("Sampling frames…")
+        frames = extract_frames_from_video(tmpvid, sample_rate)
+        os.remove(tmpvid)
 
         index, embeddings, ids = load_embeddings_index()
-
         matched_all = []
         unknown_all = []
 
         progress = st.progress(0)
+        total = len(frames)
 
         for i, frame in enumerate(frames):
             recs = process_frames_for_faces([frame])
-
             for r in recs:
-                sid, dist = match_embedding(r["embedding"], index, ids, threshold=0.8)
+                emb = r["embedding"]
+                sid, dist = match_embedding(emb, index, ids, threshold=0.6)
                 if sid:
                     matched_all.append({"student_id": sid, "distance": dist})
                 else:
-                    unknown_all.append(r["embedding"])
-
-            progress.progress(int((i + 1) / len(frames) * 100))
+                    unknown_all.append(emb)
+            progress.progress(int((i+1)/total*100))
 
         matched_unique = deduplicate_matches(matched_all)
         clusters = cluster_unknown_embeddings(unknown_all)
-
-        st.write(f"Matched Students: {len(matched_unique)}")
-        st.write(f"Unknown Face Clusters: {len(clusters)}")
-
         att_df = generate_attendance(list_students(), matched_unique)
+
+        st.subheader("Real-time Processing Result")
         st.dataframe(att_df)
 
         buf = io.BytesIO()
         att_df.to_excel(buf, index=False)
         buf.seek(0)
-        st.download_button("Download Excel", buf, file_name="attendance.xlsx")
+        st.download_button("Download Attendance Excel", buf, file_name="attendance.xlsx")
 
-        qr_buf = csv_to_qr_image(att_df)
-        st.image(qr_buf, caption="QR Backup")
-        st.download_button("Download QR", qr_buf, file_name="attendance_qr.png")
+        st.info(f"Matched unique: {len(matched_unique)}")
+        st.info(f"Unknown groups: {len(clusters)}")

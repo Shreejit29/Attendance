@@ -1,0 +1,6 @@
+deepface
+opencv-python
+matplotlib
+pandas
+openpyxl
+Pillow

@@ -1,251 +1,158 @@
-# app.py — Ultra-fast Streamlit Attendance System (SFace + OpenCV only)
-# - No TensorFlow
-# - No RetinaFace/MTCNN downloads
-# - Instant startup on Streamlit Cloud
-# - Full features: enrollment, photo/video attendance, real-time-like, clustering
-
+"""
+app.py
+Main Streamlit app for the Smart Attendance App.
+"""
 import streamlit as st
-from PIL import Image
+import pandas as pd
 import numpy as np
-import io
-import os
-import time
+from io import BytesIO
+from datetime import datetime
+import uuid
 
-from utils import (
-    enroll_student,
-    list_students,
-    set_mandatory,
-    rebuild_embeddings_index,
-    load_embeddings_index,
-    extract_frames_from_video,
-    process_frames_for_faces,
-    match_embedding,
-    deduplicate_matches,
-    cluster_unknown_embeddings,
-    generate_attendance
-)
+from face_utils import load_image_from_bytes, face_encodings_from_image, find_faces_in_class_image, match_encoding, draw_bounding_boxes
+from storage import add_student, get_student_list
 
-os.makedirs("student_db", exist_ok=True)
+st.set_page_config(page_title="Smart Attendance", layout="wide")
 
-st.set_page_config(page_title="Smart Attendance (Fast)", layout="wide")
-st.title("📘 Smart Attendance — Ultra-Fast (SFace + OpenCV Only)")
+st.title("📚 Smart Attendance (Streamlit)")
 
+# Sidebar: mode
+mode = st.sidebar.selectbox("Mode", ["Register Student", "Take Attendance", "View / Export"])
 
-menu = st.sidebar.selectbox(
-    "Menu",
-    ["Home", "Enrollment", "Manage Students", "Take Attendance (Photo/Video)", "Real-time Video Processing"]
-)
-
-
-# -----------------------------------------------------------
-# HOME
-# -----------------------------------------------------------
-if menu == "Home":
-    st.header("Welcome")
-    st.markdown("""
-### ⚡ Optimized Smart Attendance System  
-This version is tuned to deploy instantly on **Streamlit Cloud**:
-
-- Uses **SFace (PyTorch)** for fast embeddings  
-- Uses **OpenCV Haarcascade** for face detection  
-- No TensorFlow  
-- No RetinaFace  
-- No large model downloads  
-- Full features included  
-    """)
-
-
-# -----------------------------------------------------------
-# ENROLLMENT
-# -----------------------------------------------------------
-if menu == "Enrollment":
-    st.header("Enroll Student")
-
-    sid = st.text_input("Student ID")
-    name = st.text_input("Full Name")
-
-    uploaded_img = st.file_uploader("Upload photo", type=["jpg", "jpeg", "png"])
-    cam_img = st.camera_input("Or capture a photo")
-
-    if st.button("Enroll"):
-        if not sid or not name or (uploaded_img is None and cam_img is None):
-            st.warning("Please enter Student ID, Name and a photo.")
+if mode == "Register Student":
+    st.header("Register new student")
+    col1, col2 = st.columns(2)
+    with col1:
+        student_name = st.text_input("Full name")
+        student_id = st.text_input("Student ID (unique)")
+        photo_upload = st.file_uploader("Upload a photo (jpg/png)", type=["jpg","jpeg","png"])
+        capture = st.camera_input("Or capture from camera (browser)")
+    with col2:
+        st.write("Tips for better recognition:")
+        st.write("- Provide clear, front-facing photo(s).")
+        st.write("- Prefer 2-3 photos per student (different angles).")
+        add_btn = st.button("Register / Add encoding")
+    if add_btn:
+        if not student_name or not student_id:
+            st.error("Provide name and student ID.")
         else:
-            src = uploaded_img if uploaded_img else cam_img
-            tmp_path = f"tmp_en_{time.time()}.jpg"
-            with open(tmp_path, "wb") as f:
-                f.write(src.getbuffer())
-
-            enroll_student(sid, name, tmp_path)
-            os.remove(tmp_path)
-
-            st.success(f"Enrolled {name}. Updating embeddings...")
-            rebuild_embeddings_index()
-            st.success("Embeddings updated.")
-
-
-# -----------------------------------------------------------
-# MANAGE STUDENTS
-# -----------------------------------------------------------
-if menu == "Manage Students":
-    st.header("Manage Students")
-
-    df = list_students()
-    if df.empty:
-        st.info("No students enrolled yet.")
-    else:
-        st.dataframe(df)
-        st.subheader("Mandatory student selection")
-
-        changed = False
-        for _, row in df.iterrows():
-            sid = row["student_id"]
-            cur = bool(row["mandatory"])
-            new_val = st.checkbox(f"{sid} — {row['name']}", value=cur)
-            if new_val != cur:
-                set_mandatory(sid, new_val)
-                changed = True
-
-        if changed:
-            st.success("Mandatory list updated.")
-            st.experimental_rerun()
-
-
-# -----------------------------------------------------------
-# ATTENDANCE (PHOTO / VIDEO)
-# -----------------------------------------------------------
-if menu == "Take Attendance (Photo/Video)":
-    st.header("Take Attendance")
-
-    uploaded_img = st.file_uploader("Upload class photo", type=["jpg", "jpeg", "png"])
-    cam_img = st.camera_input("Or capture class photo")
-    video_file = st.file_uploader("Or upload class video", type=["mp4", "mov"])
-
-    sample_rate = st.number_input("Video sampling rate (every N frames)", 1, 30, 8)
-
-    source_path = None
-    frames = None
-
-    # photo input
-    if uploaded_img:
-        source_path = f"tmpclass_{time.time()}.jpg"
-        with open(source_path, "wb") as f:
-            f.write(uploaded_img.getbuffer())
-        st.image(uploaded_img)
-
-    elif cam_img:
-        source_path = f"tmpclasscam_{time.time()}.jpg"
-        with open(source_path, "wb") as f:
-            f.write(cam_img.getbuffer())
-        st.image(cam_img)
-
-    # video input
-    elif video_file:
-        tmpvid = f"tmpvid_{time.time()}.mp4"
-        with open(tmpvid, "wb") as f:
-            f.write(video_file.getbuffer())
-
-        st.info("Extracting frames...")
-        frames = extract_frames_from_video(tmpvid, sample_rate)
-        os.remove(tmpvid)
-
-        st.success(f"Extracted {len(frames)} frames.")
-        if frames:
-            st.image(frames[len(frames)//2][:,:,::-1], caption="Sample frame")
-
-    if (source_path or frames) and st.button("Run Attendance"):
-        embeddings_db, ids_db = load_embeddings_index()
-        meta = list_students()
-
-        if meta.empty:
-            st.warning("No students enrolled.")
-        else:
-            # process single image
-            if source_path:
-                img = Image.open(source_path).convert("RGB")
-                arr = np.array(img)[:, :, ::-1]
-                recs = process_frames_for_faces([arr])
-                os.remove(source_path)
+            added = False
+            encs = []
+            image_bytes = None
+            for src in [capture, photo_upload]:
+                if src:
+                    # src is BytesIO-like in Streamlit
+                    image_bytes = src.getvalue()
+                    try:
+                        img = load_image_from_bytes(image_bytes)
+                        e = face_encodings_from_image(img)
+                        if e:
+                            encs.extend(e)
+                            added = True
+                        else:
+                            st.warning("No face found in one of the provided images.")
+                    except Exception as e:
+                        st.error(f"Image processing error: {e}")
+            if added and encs:
+                add_student(student_id, student_name, encodings=encs, image_bytes=image_bytes)
+                st.success(f"Registered {student_name} ({student_id}) with {len(encs)} encodings.")
             else:
-                recs = process_frames_for_faces(frames)
+                st.error("No face encodings captured. Try clearer photos or more images.")
 
-            matched = []
-            unknown_embs = []
+elif mode == "Take Attendance":
+    st.header("Take attendance (auto from photos)")
+    st.write("Upload one or more class photos or capture realtime with camera.")
+    col1, col2 = st.columns(2)
+    with col1:
+        uploaded = st.file_uploader("Upload class photo(s)", type=["jpg","jpeg","png"], accept_multiple_files=True)
+        cam = st.camera_input("Or capture a photo")
+        clear_button = st.button("Clear previous session data")
+    with col2:
+        tolerance = st.slider("Matching tolerance (lower = stricter)", 0.3, 0.7, 0.5)
+        show_boxes = st.checkbox("Show bounding boxes & labels", True)
 
-            for r in recs:
-                emb = r["embedding"]
-                sid, dist = match_embedding(emb, embeddings_db, ids_db, threshold=0.55)
-                if sid:
-                    matched.append({"student_id": sid, "distance": dist})
+    # load known students
+    students = get_student_list()
+    known_encodings = []
+    known_meta = []
+    for s in students:
+        for enc in s["encodings"]:
+            known_encodings.append(enc)
+            known_meta.append({"id": s["id"], "name": s["name"]})
+    # Prepare attendance table
+    attendance = {}
+    for s in students:
+        attendance[s["id"]] = {"name": s["name"], "id": s["id"], "present": False}
+
+    # gather images
+    images = []
+    if uploaded:
+        for f in uploaded:
+            try:
+                images.append((f.name, f.getvalue()))
+            except Exception:
+                st.warning(f"Could not read {f.name}")
+    if cam:
+        images.append(("camera_capture", cam.getvalue()))
+
+    if images:
+        faces_found = []
+        for fname, blob in images:
+            img_rgb = load_image_from_bytes(blob)
+            faces = find_faces_in_class_image(img_rgb)
+            locations = [loc for loc,enc in faces]
+            encs = [enc for loc,enc in faces]
+            labels = []
+            for enc in encs:
+                idx = match_encoding(known_encodings, enc, tolerance=tolerance)
+                if idx is not None:
+                    meta = known_meta[idx]
+                    labels.append(meta["name"])
+                    # Mark that student present (set True)
+                    attendance[meta["id"]]["present"] = True
                 else:
-                    unknown_embs.append(emb)
+                    labels.append("Unknown")
+            faces_found.append((img_rgb, locations, labels))
+            # show image with boxes
+            if show_boxes:
+                boxed = draw_bounding_boxes(img_rgb, locations, labels)
+                st.image(boxed, caption=f"Detected faces in {fname}", use_column_width=True)
+            else:
+                st.image(img_rgb, caption=f"{fname}", use_column_width=True)
 
-            matched_unique = deduplicate_matches(matched)
-            clusters = cluster_unknown_embeddings(unknown_embs)
+        # Show automatic attendance summary
+        st.subheader("Automatic attendance (detected)")
+        df = pd.DataFrame([{"Student ID": v["id"], "Name": v["name"], "Present": v["present"]} for v in attendance.values()])
+        edited = st.dataframe(df)
 
-            att_df = generate_attendance(meta, matched_unique)
+        # Manual corrections
+        st.subheader("Manual corrections")
+        # create editable table via session state
+        if "attendance_df" not in st.session_state:
+            st.session_state["attendance_df"] = df
+        edited_df = st.experimental_data_editor(st.session_state["attendance_df"], num_rows="dynamic")
+        st.session_state["attendance_df"] = edited_df
 
-            st.subheader("Attendance Result")
-            st.dataframe(att_df)
+        # Export to excel
+        if st.button("Export attendance to Excel"):
+            out = BytesIO()
+            today = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+            # use the current edited df
+            final_df = st.session_state["attendance_df"]
+            final_df.to_excel(out, index=False, sheet_name=f"Attendance_{today}")
+            out.seek(0)
+            st.download_button("Download Excel", data=out, file_name=f"attendance_{today}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    else:
+        st.info("No class photos yet. Upload or capture a photo.")
 
-            buf = io.BytesIO()
-            att_df.to_excel(buf, index=False)
-            buf.seek(0)
-            st.download_button("Download Excel", buf, file_name="attendance.xlsx")
-
-            st.info(f"Matched: {len(matched_unique)}")
-            st.info(f"Unknown groups: {len(clusters)}")
-
-
-# -----------------------------------------------------------
-# REAL-TIME LIKE VIDEO PROCESSING
-# -----------------------------------------------------------
-if menu == "Real-time Video Processing":
-    st.header("Real-time-like Video Processing")
-
-    video_file = st.file_uploader("Upload classroom video", type=["mp4", "mov"])
-
-    if video_file:
-        tmpvid = f"tmp_rt_{time.time()}.mp4"
-        with open(tmpvid, "wb") as f:
-            f.write(video_file.getbuffer())
-
-        sample_rate = st.number_input("Sampling rate", 1, 30, 6)
-
-        st.info("Sampling frames...")
-        frames = extract_frames_from_video(tmpvid, sample_rate)
-        os.remove(tmpvid)
-
-        embeddings_db, ids_db = load_embeddings_index()
-
-        matched_all = []
-        unknown_all = []
-
-        progress = st.progress(0)
-        total = len(frames)
-
-        for idx, frame in enumerate(frames):
-            recs = process_frames_for_faces([frame])
-            for r in recs:
-                emb = r["embedding"]
-                sid, dist = match_embedding(emb, embeddings_db, ids_db, threshold=0.55)
-                if sid:
-                    matched_all.append({"student_id": sid, "distance": dist})
-                else:
-                    unknown_all.append(emb)
-
-            progress.progress(int((idx + 1) / total * 100))
-
-        matched_unique = deduplicate_matches(matched_all)
-        clusters = cluster_unknown_embeddings(unknown_all)
-
-        att_df = generate_attendance(list_students(), matched_unique)
-        st.dataframe(att_df)
-
-        buf = io.BytesIO()
-        att_df.to_excel(buf, index=False)
-        buf.seek(0)
-        st.download_button("Download Excel", buf, file_name="attendance.xlsx")
-
-        st.info(f"Matched unique: {len(matched_unique)}")
-        st.info(f"Unknown clusters: {len(clusters)}")
+elif mode == "View / Export":
+    st.header("Registered students")
+    students = get_student_list()
+    if not students:
+        st.info("No students registered yet.")
+    else:
+        df = pd.DataFrame([{"Student ID": s["id"], "Name": s["name"], "Num encodings": len(s["encodings"])} for s in students])
+        st.dataframe(df)
+        if st.button("Export students to CSV"):
+            csv = df.to_csv(index=False).encode("utf-8")
+            st.download_button("Download students CSV", data=csv, file_name="students.csv", mime="text/csv")

@@ -8,36 +8,46 @@ from face_utils import (
     draw_boxes,
 )
 from storage import add_student, load_students
+
 from manual_attendance import manual_attendance_ui
 from class_selector import class_subject_time_selector
 from video_attendance import video_attendance_ui
 from live_video_attendance import live_attendance_ui
 from mobile_video_attendance import mobile_attendance_ui
+from mobile_webrtc_attendance import mobile_webrtc_attendance_ui
+
 from io import BytesIO
 from datetime import datetime
 
+
+# ---------------------------------------------------------
+# PAGE TITLE
+# ---------------------------------------------------------
 st.title("📘 Smart Attendance System (InsightFace - Modular Version)")
 
-# -------------------------------------------------
-# MENU OPTIONS
-# -------------------------------------------------
+
+# ---------------------------------------------------------
+# SIDEBAR MENU
+# ---------------------------------------------------------
 mode = st.sidebar.selectbox("Menu", [
     "Register Student",
     "Take Attendance (Image)",
     "Take Attendance From Video",
     "Live Video Attendance",
-    "Mobile Camera Attendance"
+    "Mobile Camera Attendance (IP Webcam)",
+    "Mobile WebRTC Attendance (Recommended)"
 ])
 
 
-# -------------------------------------------------
+# ---------------------------------------------------------
 # REGISTER STUDENT
-# -------------------------------------------------
+# ---------------------------------------------------------
 if mode == "Register Student":
     st.header("Register Student")
 
     name = st.text_input("Student Name")
     sid = st.text_input("Student ID")
+
     upload = st.file_uploader("Upload student photo", type=["jpg","png"])
     capture = st.camera_input("Or capture")
 
@@ -51,6 +61,7 @@ if mode == "Register Student":
             else:
                 img = load_image_from_bytes(src.getvalue())
                 emb = get_face_embedding(img)
+
                 if emb:
                     add_student(sid, name, emb)
                     st.success(f"Registered {name} ({sid})")
@@ -58,9 +69,10 @@ if mode == "Register Student":
                     st.error("No face detected in photo.")
 
 
-# -------------------------------------------------
+
+# ---------------------------------------------------------
 # TAKE ATTENDANCE (IMAGE)
-# -------------------------------------------------
+# ---------------------------------------------------------
 if mode == "Take Attendance (Image)":
     st.header("Take Attendance From Image")
 
@@ -71,8 +83,8 @@ if mode == "Take Attendance (Image)":
 
     if upload or capture:
         img = load_image_from_bytes((capture or upload).getvalue())
-
         detections = find_faces_in_image(img)
+
         students = load_students()
         present = {s["id"]: False for s in students}
 
@@ -80,6 +92,7 @@ if mode == "Take Attendance (Image)":
 
         for emb, box in detections:
             boxes.append(box)
+
             best_name = "Unknown"
             best_sim = 0
 
@@ -95,6 +108,7 @@ if mode == "Take Attendance (Image)":
 
         out = draw_boxes(img, boxes, labels)
         st.image(out, caption="Detected Faces", use_column_width=True)
+
 
         st.subheader("Session Details")
         st.write(f"**Class:** {details['class']}")
@@ -117,19 +131,25 @@ if mode == "Take Attendance (Image)":
 
         if st.button("Download Excel"):
             buf = BytesIO()
+
             final_df["Class"] = details["class"]
             final_df["Subject"] = details["subject"]
             final_df["Time"] = details["time"]
+
             final_df.to_excel(buf, index=False)
             buf.seek(0)
 
-            st.download_button("Download File", data=buf,
-                               file_name=f"attendance_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx")
+            st.download_button(
+                "Download File",
+                data=buf,
+                file_name=f"attendance_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+            )
 
 
-# -------------------------------------------------
-# TAKE ATTENDANCE FROM VIDEO
-# -------------------------------------------------
+
+# ---------------------------------------------------------
+# TAKE ATTENDANCE FROM UPLOADED VIDEO
+# ---------------------------------------------------------
 if mode == "Take Attendance From Video":
     st.header("🎥 Attendance From Uploaded Video")
 
@@ -145,31 +165,35 @@ if mode == "Take Attendance From Video":
             for s in students
         ])
 
-        st.subheader("Automatic Attendance From Video")
+        st.subheader("Automatic Attendance")
         st.dataframe(df)
 
         st.subheader("Manual Correction")
         final_df = manual_attendance_ui(students, present)
 
-        st.subheader("Final Attendance Sheet")
-        st.dataframe(final_df)
-
         if st.button("Download Video Excel"):
             buf = BytesIO()
+
             final_df["Class"] = details["class"]
             final_df["Subject"] = details["subject"]
             final_df["Time"] = details["time"]
+
             final_df.to_excel(buf, index=False)
             buf.seek(0)
 
-            st.download_button("Download File", data=buf, file_name="video_attendance.xlsx")
+            st.download_button(
+                "Download File",
+                data=buf,
+                file_name="video_attendance.xlsx"
+            )
 
 
-# -------------------------------------------------
-# LIVE VIDEO ATTENDANCE
-# -------------------------------------------------
+
+# ---------------------------------------------------------
+# LIVE VIDEO ATTENDANCE (Laptop Webcam)
+# ---------------------------------------------------------
 if mode == "Live Video Attendance":
-    st.header("📡 Live Video Attendance (Laptop Webcam)")
+    st.header("📡 Live Laptop Webcam Attendance")
 
     details = class_subject_time_selector()
 
@@ -182,32 +206,32 @@ if mode == "Live Video Attendance":
             {"Student ID": s["id"], "Name": s["name"], "Present": present[s["id"]]}
             for s in students
         ])
-
-        st.subheader("Live Attendance Result")
         st.dataframe(df)
 
         final_df = manual_attendance_ui(students, present)
 
-        st.subheader("Final Attendance Sheet")
-        st.dataframe(final_df)
-
         if st.button("Download Live Excel"):
             buf = BytesIO()
+
             final_df["Class"] = details["class"]
             final_df["Subject"] = details["subject"]
             final_df["Time"] = details["time"]
+
             final_df.to_excel(buf, index=False)
             buf.seek(0)
 
             st.download_button(
-                "Download File", data=buf, file_name="live_attendance.xlsx"
+                "Download File",
+                data=buf,
+                file_name="live_attendance.xlsx"
             )
 
 
-# -------------------------------------------------
-# MOBILE CAMERA ATTENDANCE
-# -------------------------------------------------
-if mode == "Mobile Camera Attendance":
+
+# ---------------------------------------------------------
+# MOBILE CAMERA ATTENDANCE (IP Webcam)
+# ---------------------------------------------------------
+if mode == "Mobile Camera Attendance (IP Webcam)":
     st.header("📱 Mobile Camera Attendance (IP Webcam)")
 
     details = class_subject_time_selector()
@@ -221,23 +245,61 @@ if mode == "Mobile Camera Attendance":
             {"Student ID": s["id"], "Name": s["name"], "Present": present[s["id"]]}
             for s in students
         ])
-
-        st.subheader("Mobile Attendance Result")
         st.dataframe(df)
 
         final_df = manual_attendance_ui(students, present)
 
-        st.subheader("Final Attendance Sheet")
-        st.dataframe(final_df)
-
         if st.button("Download Mobile Excel"):
             buf = BytesIO()
+
             final_df["Class"] = details["class"]
             final_df["Subject"] = details["subject"]
             final_df["Time"] = details["time"]
+
             final_df.to_excel(buf, index=False)
             buf.seek(0)
 
             st.download_button(
-                "Download File", data=buf, file_name="mobile_attendance.xlsx"
+                "Download File",
+                data=buf,
+                file_name="mobile_attendance.xlsx"
+            )
+
+
+
+# ---------------------------------------------------------
+# MOBILE CAMERA ATTENDANCE (WebRTC) — BEST OPTION
+# ---------------------------------------------------------
+if mode == "Mobile WebRTC Attendance (Recommended)":
+    st.header("📱 Mobile WebRTC Attendance (Recommended — No Apps Needed)")
+
+    details = class_subject_time_selector()
+
+    present, done = mobile_webrtc_attendance_ui()
+
+    if done:
+        students = load_students()
+
+        df = pd.DataFrame([
+            {"Student ID": s["id"], "Name": s["name"], "Present": present[s["id"]]}
+            for s in students
+        ])
+        st.dataframe(df)
+
+        final_df = manual_attendance_ui(students, present)
+
+        if st.button("Download Mobile WebRTC Excel"):
+            buf = BytesIO()
+
+            final_df["Class"] = details["class"]
+            final_df["Subject"] = details["subject"]
+            final_df["Time"] = details["time"]
+
+            final_df.to_excel(buf, index=False)
+            buf.seek(0)
+
+            st.download_button(
+                "Download File",
+                data=buf,
+                file_name="mobile_webrtc_attendance.xlsx"
             )

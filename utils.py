@@ -1,53 +1,46 @@
-# utils.py — Ultra-fast TF-free face recognition utilities
-# Detector backend: opencv (Haarcascade)
-# Embedding model: SFace (PyTorch, lightweight, no downloads)
-# No TensorFlow, No RetinaFace, No MTCNN, No heavy models.
+# utils.py — Face Recognition (dlib) backend for Attendance System
+# No DeepFace, No TensorFlow, No SciPy.
+# Fully compatible with Streamlit Cloud.
 
 import os
+import cv2
 import numpy as np
 import pandas as pd
 from PIL import Image
-import cv2
-from deepface import DeepFace
+import face_recognition
 from sklearn.cluster import DBSCAN
 import time
 
-# -------------------------
-# Paths
-# -------------------------
 DB_PATH = "student_db"
 META_CSV = os.path.join(DB_PATH, "metadata.csv")
 EMB_NPZ = os.path.join(DB_PATH, "embeddings.npz")
 
 os.makedirs(DB_PATH, exist_ok=True)
 
-# Use only OpenCV Haarcascade for detection
-HAAR_PATH = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-face_detector = cv2.CascadeClassifier(HAAR_PATH)
+# Distance threshold (Your selection)
+THRESHOLD = 0.65
 
 
-# -------------------------
+# --------------------------------------------------------
 # ENROLLMENT
-# -------------------------
+# --------------------------------------------------------
 def enroll_student(student_id: str, name: str, image_path: str):
     """
-    Save student image and update metadata.
+    Save student image and update metadata, then re-generate embeddings.
     """
     filename = f"{student_id}__{name.replace(' ', '_')}.jpg"
     dest = os.path.join(DB_PATH, filename)
 
-    # Save image in DB
-    Image.open(image_path).convert("RGB").save(dest)
+    img = Image.open(image_path).convert("RGB")
+    img.save(dest)
 
-    # Update metadata
+    # Update metadata CSV
     if os.path.exists(META_CSV):
         df = pd.read_csv(META_CSV)
     else:
         df = pd.DataFrame(columns=["student_id", "name", "filename", "mandatory"])
 
-    # remove old entry if exists
-    df = df[df["student_id"] != str(student_id)]
-
+    df = df[df["student_id"] != str(student_id)]  # remove old
     df = pd.concat([
         df,
         pd.DataFrame([{
@@ -79,180 +72,145 @@ def set_mandatory(student_id: str, value: bool):
     return False
 
 
-# -------------------------
-# FACE DETECTION (OpenCV Haarcascade)
-# -------------------------
-def detect_faces_opencv(image_array):
+# --------------------------------------------------------
+# FACE DETECTION + ENCODING
+# --------------------------------------------------------
+def detect_and_encode(image):
     """
-    Detect faces using OpenCV Haarcascade and return cropped faces.
+    Detect a face and generate a 128-D embedding.
+    Returns list of encodings.
     """
-    gray = cv2.cvtColor(image_array, cv2.COLOR_BGR2GRAY)
-    faces = face_detector.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5)
+    # face_recognition expects RGB
+    rgb = image[:, :, ::-1]
 
-    crops = []
-    for (x, y, w, h) in faces:
-        crop = image_array[y:y+h, x:x+w]
-        crops.append(crop)
-    return crops
+    boxes = face_recognition.face_locations(rgb, model="hog")  # fast, CPU-safe
+    if not boxes:
+        return []
 
-
-# -------------------------
-# EMBEDDING COMPUTATION (SFace)
-# -------------------------
-def compute_embedding_from_array(np_img):
-    """
-    Compute embedding directly from a numpy image array.
-    """
-    try:
-        rep = DeepFace.represent(
-            img_path=np_img,
-            model_name="SFace",           # FAST + Accurate + Torch-based
-            detector_backend="skip",      # detection already done
-            enforce_detection=False
-        )
-        return np.array(rep)
-    except Exception:
-        return None
+    encodings = face_recognition.face_encodings(rgb, boxes)
+    return encodings
 
 
-# -------------------------
-# REBUILD EMBEDDINGS
-# -------------------------
+# --------------------------------------------------------
+# EMBEDDINGS INDEX
+# --------------------------------------------------------
 def rebuild_embeddings_index():
     df = list_students()
-    embeddings = []
-    ids = []
+    all_embeddings = []
+    all_ids = []
 
     for _, row in df.iterrows():
-        img_path = os.path.join(DB_PATH, row["filename"])
-        img = np.array(Image.open(img_path))[:, :, ::-1]
+        path = os.path.join(DB_PATH, row["filename"])
 
-        faces = detect_faces_opencv(img)
-        if not faces:
+        img = np.array(Image.open(path).convert("RGB"))
+        encs = detect_and_encode(img)
+        if not encs:
             continue
 
-        emb = compute_embedding_from_array(faces[0])
-        if emb is None:
-            continue
+        # Save the first detected face
+        all_embeddings.append(encs[0])
+        all_ids.append(str(row["student_id"]))
 
-        embeddings.append(emb)
-        ids.append(str(row["student_id"]))
-
-    if embeddings:
-        np.savez(EMB_NPZ, embeddings=np.vstack(embeddings), ids=np.array(ids))
+    if all_embeddings:
+        np.savez(EMB_NPZ, embeddings=np.vstack(all_embeddings), ids=np.array(all_ids))
     else:
         if os.path.exists(EMB_NPZ):
             os.remove(EMB_NPZ)
 
 
 def load_embeddings_index():
-    if not os.path.exists(EMB_NPZ):
-        return None, None
-    data = np.load(EMB_NPZ, allow_pickle=True)
-    return data["embeddings"], data["ids"]
+    if os.path.exists(EMB_NPZ):
+        data = np.load(EMB_NPZ, allow_pickle=True)
+        return data["embeddings"], data["ids"]
+    return None, None
 
 
-# -------------------------
-# COSINE MATCHING
-# -------------------------
-def cosine_distance(a, b):
-    a = a.astype(float)
-    b = b.astype(float)
-    return 1 - np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-10)
-
-
-def match_embedding(embedding, embeddings_db, ids_db, threshold=0.55):
+# --------------------------------------------------------
+# MATCHING
+# --------------------------------------------------------
+def match_embedding(embedding, embeddings_db, ids_db, threshold=THRESHOLD):
+    """
+    Finds the closest face from DB using Euclidean distance.
+    """
     if embeddings_db is None:
         return None, None
 
-    best_id = None
-    best_dist = 999
-
-    for db_emb, sid in zip(embeddings_db, ids_db):
-        d = cosine_distance(embedding, db_emb)
-        if d < best_dist:
-            best_dist = d
-            best_id = sid
+    distances = np.linalg.norm(embeddings_db - embedding, axis=1)
+    idx = np.argmin(distances)
+    best_dist = distances[idx]
 
     if best_dist <= threshold:
-        return best_id, best_dist
+        return ids_db[idx], best_dist
     return None, best_dist
 
 
-# -------------------------
+# --------------------------------------------------------
 # VIDEO FRAME EXTRACTION
-# -------------------------
+# --------------------------------------------------------
 def extract_frames_from_video(video_path, sample_rate=8):
     frames = []
     cap = cv2.VideoCapture(video_path)
-    count = 0
+    index = 0
 
     while True:
         ret, frame = cap.read()
         if not ret:
             break
-
-        if count % sample_rate == 0:
+        if index % sample_rate == 0:
             frames.append(frame)
-
-        count += 1
+        index += 1
 
     cap.release()
     return frames
 
 
-# -------------------------
-# PROCESS FRAMES: DETECT + EMBED
-# -------------------------
+# --------------------------------------------------------
+# PROCESS FRAMES: DETECT + ENCODE
+# --------------------------------------------------------
 def process_frames_for_faces(frames):
-    out = []
-
-    for idx, frame in enumerate(frames):
-        faces = detect_faces_opencv(frame)
-
-        for fc in faces:
-            emb = compute_embedding_from_array(fc)
-            if emb is not None:
-                out.append({
-                    "frame_idx": idx,
-                    "embedding": emb
-                })
-
-    return out
+    results = []
+    for i, frame in enumerate(frames):
+        encs = detect_and_encode(frame)
+        for e in encs:
+            results.append({"frame_idx": i, "embedding": e})
+    return results
 
 
-# -------------------------
-# MATCH DEDUPLICATION
-# -------------------------
+# --------------------------------------------------------
+# DEDUPLICATE MATCHES
+# --------------------------------------------------------
 def deduplicate_matches(matches):
-    unique = {}
+    """
+    Removes repeated students across frames.
+    """
+    seen = {}
     for m in matches:
         sid = m["student_id"]
-        if sid not in unique:
-            unique[sid] = m
-    return list(unique.values())
+        if sid not in seen:
+            seen[sid] = m
+    return list(seen.values())
 
 
-# -------------------------
-# UNKNOWN FACE CLUSTERING
-# -------------------------
-def cluster_unknown_embeddings(emb_list, eps=0.75, min_samples=2):
+# --------------------------------------------------------
+# UNKNOWN CLUSTERING
+# --------------------------------------------------------
+def cluster_unknown_embeddings(emb_list):
     if not emb_list:
         return []
 
-    X = np.vstack(emb_list).astype("float32")
-    db = DBSCAN(eps=eps, min_samples=min_samples).fit(X)
+    X = np.vstack(emb_list)
+    clustering = DBSCAN(eps=0.7, min_samples=2).fit(X)
 
     clusters = {}
-    for i, label in enumerate(db.labels_):
+    for i, label in enumerate(clustering.labels_):
         clusters.setdefault(label, []).append(i)
 
     return clusters
 
 
-# -------------------------
+# --------------------------------------------------------
 # ATTENDANCE GENERATION
-# -------------------------
+# --------------------------------------------------------
 def generate_attendance(meta_df, matched):
     matched_ids = [m["student_id"] for m in matched]
     dist_map = {m["student_id"]: m["distance"] for m in matched}
@@ -261,6 +219,7 @@ def generate_attendance(meta_df, matched):
     for _, r in meta_df.iterrows():
         sid = str(r["student_id"])
         present = sid in matched_ids
+
         rows.append({
             "student_id": sid,
             "name": r["name"],

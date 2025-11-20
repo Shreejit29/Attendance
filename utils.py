@@ -1,8 +1,7 @@
-# utils.py — TF-free utilities for Smart Attendance App
-# Avoids TensorFlow + RetinaFace. Uses PyTorch-based DeepFace backends.
-#
-# Supported detector_backends: mtcnn, opencv, ssd, dlib
-# Supported models: Facenet, Facenet512, ArcFace, VGG-Face, SFace
+# utils.py — Ultra-fast TF-free face recognition utilities
+# Detector backend: opencv (Haarcascade)
+# Embedding model: SFace (PyTorch, lightweight, no downloads)
+# No TensorFlow, No RetinaFace, No MTCNN, No heavy models.
 
 import os
 import numpy as np
@@ -11,20 +10,25 @@ from PIL import Image
 import cv2
 from deepface import DeepFace
 from sklearn.cluster import DBSCAN
+import time
 
-# -------------------------------------------
+# -------------------------
 # Paths
-# -------------------------------------------
+# -------------------------
 DB_PATH = "student_db"
 META_CSV = os.path.join(DB_PATH, "metadata.csv")
 EMB_NPZ = os.path.join(DB_PATH, "embeddings.npz")
 
 os.makedirs(DB_PATH, exist_ok=True)
 
-# -------------------------------------------
-# ENROLLMENT
-# -------------------------------------------
+# Use only OpenCV Haarcascade for detection
+HAAR_PATH = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+face_detector = cv2.CascadeClassifier(HAAR_PATH)
 
+
+# -------------------------
+# ENROLLMENT
+# -------------------------
 def enroll_student(student_id: str, name: str, image_path: str):
     """
     Save student image and update metadata.
@@ -32,17 +36,20 @@ def enroll_student(student_id: str, name: str, image_path: str):
     filename = f"{student_id}__{name.replace(' ', '_')}.jpg"
     dest = os.path.join(DB_PATH, filename)
 
+    # Save image in DB
     Image.open(image_path).convert("RGB").save(dest)
 
     # Update metadata
     if os.path.exists(META_CSV):
-        meta = pd.read_csv(META_CSV)
+        df = pd.read_csv(META_CSV)
     else:
-        meta = pd.DataFrame(columns=["student_id", "name", "filename", "mandatory"])
+        df = pd.DataFrame(columns=["student_id", "name", "filename", "mandatory"])
 
-    meta = meta[meta["student_id"] != str(student_id)]
-    meta = pd.concat([
-        meta,
+    # remove old entry if exists
+    df = df[df["student_id"] != str(student_id)]
+
+    df = pd.concat([
+        df,
         pd.DataFrame([{
             "student_id": str(student_id),
             "name": name,
@@ -51,12 +58,10 @@ def enroll_student(student_id: str, name: str, image_path: str):
         }])
     ], ignore_index=True)
 
-    meta.to_csv(META_CSV, index=False)
+    df.to_csv(META_CSV, index=False)
 
-    # Rebuild embeddings
+    # rebuild embeddings
     rebuild_embeddings_index()
-
-    return dest
 
 
 def list_students():
@@ -73,40 +78,67 @@ def set_mandatory(student_id: str, value: bool):
         return True
     return False
 
-# -------------------------------------------
-# EMBEDDINGS (NO TENSORFLOW)
-# -------------------------------------------
 
-def compute_embedding(image_path, model_name="Facenet", detector_backend="mtcnn"):
+# -------------------------
+# FACE DETECTION (OpenCV Haarcascade)
+# -------------------------
+def detect_faces_opencv(image_array):
     """
-    Compute embedding using DeepFace.represent (Torch models).
+    Detect faces using OpenCV Haarcascade and return cropped faces.
+    """
+    gray = cv2.cvtColor(image_array, cv2.COLOR_BGR2GRAY)
+    faces = face_detector.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5)
+
+    crops = []
+    for (x, y, w, h) in faces:
+        crop = image_array[y:y+h, x:x+w]
+        crops.append(crop)
+    return crops
+
+
+# -------------------------
+# EMBEDDING COMPUTATION (SFace)
+# -------------------------
+def compute_embedding_from_array(np_img):
+    """
+    Compute embedding directly from a numpy image array.
     """
     try:
         rep = DeepFace.represent(
-            img_path=image_path,
-            model_name=model_name,
-            detector_backend=detector_backend,
-            enforce_detection=False   # avoid hard crashes
+            img_path=np_img,
+            model_name="SFace",           # FAST + Accurate + Torch-based
+            detector_backend="skip",      # detection already done
+            enforce_detection=False
         )
         return np.array(rep)
     except Exception:
         return None
 
 
-def rebuild_embeddings_index(model="Facenet", detector="mtcnn"):
+# -------------------------
+# REBUILD EMBEDDINGS
+# -------------------------
+def rebuild_embeddings_index():
     df = list_students()
     embeddings = []
     ids = []
 
     for _, row in df.iterrows():
-        path = os.path.join(DB_PATH, row["filename"])
-        if os.path.exists(path):
-            emb = compute_embedding(path, model_name=model, detector_backend=detector)
-            if emb is not None:
-                embeddings.append(emb)
-                ids.append(str(row["student_id"]))
+        img_path = os.path.join(DB_PATH, row["filename"])
+        img = np.array(Image.open(img_path))[:, :, ::-1]
 
-    if len(embeddings) > 0:
+        faces = detect_faces_opencv(img)
+        if not faces:
+            continue
+
+        emb = compute_embedding_from_array(faces[0])
+        if emb is None:
+            continue
+
+        embeddings.append(emb)
+        ids.append(str(row["student_id"]))
+
+    if embeddings:
         np.savez(EMB_NPZ, embeddings=np.vstack(embeddings), ids=np.array(ids))
     else:
         if os.path.exists(EMB_NPZ):
@@ -116,23 +148,20 @@ def rebuild_embeddings_index(model="Facenet", detector="mtcnn"):
 def load_embeddings_index():
     if not os.path.exists(EMB_NPZ):
         return None, None
-
     data = np.load(EMB_NPZ, allow_pickle=True)
     return data["embeddings"], data["ids"]
 
-# -------------------------------------------
-# MATCHING (cosine distance)
-# -------------------------------------------
 
+# -------------------------
+# COSINE MATCHING
+# -------------------------
 def cosine_distance(a, b):
-    if a is None or b is None:
-        return 999
     a = a.astype(float)
     b = b.astype(float)
     return 1 - np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-10)
 
 
-def match_embedding(embedding, embeddings_db, ids_db, threshold=0.6):
+def match_embedding(embedding, embeddings_db, ids_db, threshold=0.55):
     if embeddings_db is None:
         return None, None
 
@@ -149,85 +178,53 @@ def match_embedding(embedding, embeddings_db, ids_db, threshold=0.6):
         return best_id, best_dist
     return None, best_dist
 
-# -------------------------------------------
-# FRAME EXTRACTION
-# -------------------------------------------
 
+# -------------------------
+# VIDEO FRAME EXTRACTION
+# -------------------------
 def extract_frames_from_video(video_path, sample_rate=8):
     frames = []
     cap = cv2.VideoCapture(video_path)
-
     count = 0
+
     while True:
         ret, frame = cap.read()
         if not ret:
             break
+
         if count % sample_rate == 0:
             frames.append(frame)
+
         count += 1
 
     cap.release()
     return frames
 
-# -------------------------------------------
-# FACE EXTRACTION + EMBEDDING PER FRAME
-# -------------------------------------------
 
-def process_frames_for_faces(frames, model_name="Facenet", detector_backend="mtcnn"):
-    """
-    Process list of frames:
-    - detect faces using DeepFace.extract_faces
-    - compute embedding for each cropped face
-    """
+# -------------------------
+# PROCESS FRAMES: DETECT + EMBED
+# -------------------------
+def process_frames_for_faces(frames):
     out = []
 
     for idx, frame in enumerate(frames):
-        rgb = frame[:, :, ::-1]  # BGR → RGB
-        # save temporary
-        tmp_path = f"tmp_face_{time.time()}_{idx}.jpg"
-        Image.fromarray(rgb).save(tmp_path)
-
-        try:
-            faces = DeepFace.extract_faces(
-                img_path=tmp_path,
-                detector_backend=detector_backend,
-                enforce_detection=False
-            )
-        except:
-            faces = []
+        faces = detect_faces_opencv(frame)
 
         for fc in faces:
-            crop = fc["face"]
-            # save crop temporarily
-            crop_path = f"tmp_crop_{time.time()}_{idx}.jpg"
-            Image.fromarray(crop).save(crop_path)
-
-            emb = compute_embedding(
-                crop_path,
-                model_name=model_name,
-                detector_backend=detector_backend
-            )
-
+            emb = compute_embedding_from_array(fc)
             if emb is not None:
-                out.append({"frame_idx": idx, "embedding": emb})
-
-            try:
-                os.remove(crop_path)
-            except:
-                pass
-
-        try:
-            os.remove(tmp_path)
-        except:
-            pass
+                out.append({
+                    "frame_idx": idx,
+                    "embedding": emb
+                })
 
     return out
 
-# -------------------------------------------
-# DEDUPLICATION
-# -------------------------------------------
 
-def deduplicate_matches(matches, similarity_threshold=0.6):
+# -------------------------
+# MATCH DEDUPLICATION
+# -------------------------
+def deduplicate_matches(matches):
     unique = {}
     for m in matches:
         sid = m["student_id"]
@@ -235,33 +232,33 @@ def deduplicate_matches(matches, similarity_threshold=0.6):
             unique[sid] = m
     return list(unique.values())
 
-# -------------------------------------------
-# UNKNOWN FACE CLUSTERING
-# -------------------------------------------
 
-def cluster_unknown_embeddings(emb_list, eps=0.8, min_samples=2):
-    if len(emb_list) == 0:
+# -------------------------
+# UNKNOWN FACE CLUSTERING
+# -------------------------
+def cluster_unknown_embeddings(emb_list, eps=0.75, min_samples=2):
+    if not emb_list:
         return []
 
     X = np.vstack(emb_list).astype("float32")
-    db = DBSCAN(eps=eps, min_samples=min_samples, metric="euclidean").fit(X)
-    labels = db.labels_
+    db = DBSCAN(eps=eps, min_samples=min_samples).fit(X)
 
     clusters = {}
-    for i, label in enumerate(labels):
+    for i, label in enumerate(db.labels_):
         clusters.setdefault(label, []).append(i)
+
     return clusters
 
-# -------------------------------------------
-# ATTENDANCE DF
-# -------------------------------------------
 
-def generate_attendance(metadata_df, matched_records):
-    matched_ids = [m["student_id"] for m in matched_records]
-    dist_map = {m["student_id"]: m["distance"] for m in matched_records}
+# -------------------------
+# ATTENDANCE GENERATION
+# -------------------------
+def generate_attendance(meta_df, matched):
+    matched_ids = [m["student_id"] for m in matched]
+    dist_map = {m["student_id"]: m["distance"] for m in matched}
 
     rows = []
-    for _, r in metadata_df.iterrows():
+    for _, r in meta_df.iterrows():
         sid = str(r["student_id"])
         present = sid in matched_ids
         rows.append({

@@ -2,35 +2,35 @@ import os
 import pickle
 
 DATA_DIR = "data"
-ENCODINGS_FILE = os.path.join(DATA_DIR, "students.pkl")
+FILE = os.path.join(DATA_DIR, "students.pkl")
 
 def ensure():
     os.makedirs(DATA_DIR, exist_ok=True)
 
 def load_students():
     ensure()
-    if not os.path.exists(ENCODINGS_FILE):
+    if not os.path.exists(FILE):
         return []
-    with open(ENCODINGS_FILE, "rb") as f:
+    with open(FILE, "rb") as f:
         return pickle.load(f)
 
 def save_students(data):
     ensure()
-    with open(ENCODINGS_FILE, "wb") as f:
+    with open(FILE, "wb") as f:
         pickle.dump(data, f)
 
-def add_student(student_id, name, embedding_list):
+def add_student(sid, name, embedding):
     data = load_students()
-    # append embedding if student exists
+
     for s in data:
-        if s["id"] == student_id:
-            s["embeddings"].append(embedding_list)
+        if s["id"] == sid:
+            s["embeddings"].append(embedding)
             save_students(data)
             return
-    # new student
+
     data.append({
-        "id": student_id,
+        "id": sid,
         "name": name,
-        "embeddings": [embedding_list]
+        "embeddings": [embedding]
     })
     save_students(data)

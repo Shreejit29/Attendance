@@ -11,7 +11,6 @@ RTC_CONFIG = RTCConfiguration({
     "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
 })
 
-# Global attendance dictionary during session
 global_present = {}
 
 def reset_attendance():
@@ -26,7 +25,6 @@ def video_frame_callback(frame):
     img = frame.to_ndarray(format="bgr24")
     rgb = img[:, :, ::-1]
 
-    # Detect faces
     detections = find_faces_in_image(rgb)
     students = load_students()
 
@@ -41,18 +39,23 @@ def video_frame_callback(frame):
 
 
 def mobile_webrtc_attendance_ui():
-    st.subheader("📱 WebRTC Mobile Camera Attendance")
+    st.subheader("📱 Mobile WebRTC Attendance (Back Camera Enabled)")
+
+    st.info("Open this Streamlit app on your mobile browser. Allow camera access.")
 
     reset_attendance()
-
-    st.info("Open this Streamlit app on your MOBILE browser. Then allow camera access.")
 
     webrtc_streamer(
         key="mobile-attendance",
         mode=WebRtcMode.SENDRECV,
         rtc_configuration=RTC_CONFIG,
         video_frame_callback=video_frame_callback,
-        media_stream_constraints={"video": True, "audio": False},
+        media_stream_constraints={
+            "video": {
+                "facingMode": "environment"   # <<< USE BACK CAMERA
+            },
+            "audio": False
+        },
     )
 
     if st.button("Finish Attendance"):

@@ -1,0 +1,13 @@
+streamlit
+deepface
+opencv-python-headless
+numpy
+pandas
+pillow
+tqdm
+scikit-learn
+faiss-cpu
+qrcode
+python-multipart
+pyzbar
+openpyxl

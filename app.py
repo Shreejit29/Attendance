@@ -9,6 +9,7 @@ from face_utils import (
 )
 from storage import add_student, load_students
 from manual_attendance import manual_attendance_ui
+from class_selector import class_subject_time_selector
 from io import BytesIO
 from datetime import datetime
 
@@ -17,15 +18,15 @@ st.title("📘 Smart Attendance System (InsightFace - TensorFlow Free)")
 mode = st.sidebar.selectbox("Menu", ["Register Student", "Take Attendance"])
 
 
-# --------------------------------------------
-#         REGISTER STUDENT
-# --------------------------------------------
+# ==================================================
+#                 REGISTER STUDENT
+# ==================================================
 if mode == "Register Student":
     st.header("Register Student")
 
     name = st.text_input("Student Name")
     sid = st.text_input("Student ID")
-    upload = st.file_uploader("Upload student photo", type=["jpg","png"])
+    upload = st.file_uploader("Upload student photo", type=["jpg", "png"])
     capture = st.camera_input("Or capture")
 
     if st.button("Register"):
@@ -45,28 +46,35 @@ if mode == "Register Student":
                     st.error("No face detected in photo.")
 
 
-# --------------------------------------------
-#         TAKE ATTENDANCE
-# --------------------------------------------
+# ==================================================
+#                 TAKE ATTENDANCE
+# ==================================================
 if mode == "Take Attendance":
     st.header("Take Attendance")
 
-    upload = st.file_uploader("Upload class photo", type=["jpg","png"])
+    # --------------------------------------------
+    # Select Class, Subject, Time
+    # --------------------------------------------
+    details = class_subject_time_selector()
+
+    st.write("---")
+
+    upload = st.file_uploader("Upload class photo", type=["jpg", "png"])
     capture = st.camera_input("Or capture class photo")
 
     if upload or capture:
         img = load_image_from_bytes((capture or upload).getvalue())
 
-        # Detect faces
-        detected = find_faces_in_image(img)
-
+        detected = find_faces_in_image(img)  # faces + embeddings
         students = load_students()
         present = {s["id"]: False for s in students}
 
         boxes = []
         labels = []
 
-        # Matching
+        # --------------------------------------------
+        # Automatic attendance matching
+        # --------------------------------------------
         for emb, box in detected:
             boxes.append(box)
             best_name = "Unknown"
@@ -82,13 +90,14 @@ if mode == "Take Attendance":
 
             labels.append(best_name)
 
-        # Show detection
+        # --------------------------------------------
+        # Display detection with rectangles
+        # --------------------------------------------
         out_img = draw_boxes(img, boxes, labels)
         st.image(out_img, use_column_width=True, caption="Detected Faces")
 
-
         # --------------------------------------------
-        # MANUAL ATTENDANCE FIX SECTION (NEW)
+        # Automatic attendance table
         # --------------------------------------------
         st.subheader("Automatic Attendance Result")
 
@@ -100,21 +109,40 @@ if mode == "Take Attendance":
 
         st.dataframe(auto_df)
 
-        st.write("### Manual Attendance Correction (if someone was missed)")
+        st.write("### Manual Attendance Correction (If someone was missed)")
 
-        # Call the manual attendance UI module
+        # --------------------------------------------
+        # Manual attendance editor
+        # --------------------------------------------
         final_df = manual_attendance_ui(students, present)
+
+        # --------------------------------------------
+        # Add CLASS / SUBJECT / TIME columns
+        # --------------------------------------------
+        final_df["Class"] = details["class"]
+        final_df["Subject"] = details["subject"]
+        final_df["Time"] = details["time"]
 
         st.subheader("Final Attendance Sheet")
         st.dataframe(final_df)
 
-        # Download final Excel
+        # --------------------------------------------
+        # Excel Export
+        # --------------------------------------------
         if st.button("Download Excel"):
-            buf = BytesIO()
-            final_df.to_excel(buf, index=False)
-            buf.seek(0)
+            buffer = BytesIO()
+            final_df.to_excel(buffer, index=False)
+            buffer.seek(0)
+
+            file_name = (
+                f"{details['class'].replace(' ', '_')}_"
+                f"{details['subject'].replace(' ', '_')}_"
+                f"{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+            )
+
             st.download_button(
                 "Download File",
-                data=buf,
-                file_name=f"attendance_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+                data=buffer,
+                file_name=file_name,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )

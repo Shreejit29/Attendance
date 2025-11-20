@@ -1,6 +1,7 @@
+streamlit
 deepface
-opencv-python
-matplotlib
+opencv-python-headless
+numpy
 pandas
-openpyxl
 Pillow
+tf-keras

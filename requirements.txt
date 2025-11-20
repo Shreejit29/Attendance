@@ -1,14 +1,12 @@
 streamlit
 deepface==0.0.79
-tensorflow-cpu==2.12.0
-tf-keras
+opencv-python-headless
 numpy<2
 pandas
 pillow
-opencv-python-headless
 scikit-learn
 tqdm
-qrcode
 python-multipart
 pyzbar
 openpyxl
+qrcode

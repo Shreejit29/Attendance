@@ -5,3 +5,5 @@ pandas
 insightface
 onnxruntime
 openpyxl
+streamlit-webrtc
+aiortc

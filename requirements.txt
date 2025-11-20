@@ -1,7 +1,7 @@
 streamlit
-deepface
 opencv-python-headless
 numpy
 pandas
+insightface
+onnxruntime
 openpyxl
-tf-keras

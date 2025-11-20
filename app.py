@@ -1,81 +1,82 @@
 import streamlit as st
 import pandas as pd
-from face_utils import load_image_from_bytes, get_face_embedding, find_faces_in_image, compare_embeddings, draw_boxes
+from face_utils import (
+    load_image_from_bytes,
+    get_face_embedding,
+    find_faces_in_image,
+    cosine_similarity,
+    draw_boxes,
+)
 from storage import add_student, load_students
 from io import BytesIO
 from datetime import datetime
 
-st.title("📘 Smart Attendance System (DeepFace)")
+st.title("📘 Smart Attendance System (InsightFace - TensorFlow Free)")
 
 mode = st.sidebar.selectbox("Menu", ["Register Student", "Take Attendance"])
 
-# -------------------- REGISTER STUDENT ----------------------
+# ---------------- REGISTER ----------------
 if mode == "Register Student":
     st.header("Register Student")
 
     name = st.text_input("Student Name")
-    sid  = st.text_input("Student ID")
+    sid = st.text_input("Student ID")
     upload = st.file_uploader("Upload student photo", type=["jpg","png"])
-    capture = st.camera_input("Or capture photo")
+    capture = st.camera_input("Or capture")
 
     if st.button("Register"):
-        if not sid or not name:
-            st.error("Enter name & student ID")
+        if not name or not sid:
+            st.error("Enter name & ID")
         else:
-            src = capture or upload
-            if not src:
-                st.error("Upload/capture photo")
+            img_src = capture or upload
+            if not img_src:
+                st.error("Upload or capture a photo")
             else:
-                img = load_image_from_bytes(src.getvalue())
+                img = load_image_from_bytes(img_src.getvalue())
                 emb = get_face_embedding(img)
                 if emb:
                     add_student(sid, name, emb)
-                    st.success("Student registered successfully!")
+                    st.success(f"Registered {name}")
                 else:
-                    st.error("No face detected. Try another photo.")
+                    st.error("No face detected")
 
-# --------------------- TAKE ATTENDANCE ----------------------
+# ---------------- TAKE ATTENDANCE ----------------
 if mode == "Take Attendance":
-    st.header("Upload classroom photo")
+    st.header("Take Attendance")
 
     upload = st.file_uploader("Upload class photo", type=["jpg","png"])
     capture = st.camera_input("Or capture class photo")
 
     if upload or capture:
-        img_bytes = (capture or upload).getvalue()
-        img = load_image_from_bytes(img_bytes)
-
-        faces = find_faces_in_image(img)
+        img = load_image_from_bytes((capture or upload).getvalue())
+        detections = find_faces_in_image(img)
 
         students = load_students()
         present = {s["id"]: False for s in students}
+        boxes, labels = [], []
 
-        boxes = []
-        labels = []
-
-        for emb, box in faces:
-            boxes.append((box["x"], box["y"], box["w"], box["h"]))
-
-            matched = "Unknown"
+        for emb, box in detections:
+            boxes.append(box)
+            best_name = "Unknown"
+            best_similarity = 0.0
 
             for s in students:
                 for st_emb in s["embeddings"]:
-                    ok, dist = compare_embeddings(emb, st_emb)
-                    if ok:
-                        matched = s["name"]
+                    sim = cosine_similarity(emb, st_emb)
+                    if sim > 0.55 and sim > best_similarity:
+                        best_similarity = sim
+                        best_name = s["name"]
                         present[s["id"]] = True
-                        break
 
-            labels.append(matched)
+            labels.append(best_name)
 
-        out_img = draw_boxes(img, boxes, labels)
-        st.image(out_img, caption="Detected Faces", use_column_width=True)
+        out = draw_boxes(img, boxes, labels)
+        st.image(out, use_column_width=True, caption="Detected Faces")
 
-        # CREATE ATTENDANCE TABLE
         df = pd.DataFrame([{
             "Student ID": s["id"],
             "Name": s["name"],
-            "Present": present[s["id"]]
+            "Present": present[s["id"]],
         } for s in students])
 
         st.subheader("Attendance Sheet")
@@ -86,4 +87,3 @@ if mode == "Take Attendance":
             df.to_excel(buf, index=False)
             buf.seek(0)
             st.download_button("Download", data=buf, file_name="attendance.xlsx")
-

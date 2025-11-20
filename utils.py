@@ -1,231 +1,251 @@
-# utils.py — Face Recognition (dlib) backend for Attendance System
-# No DeepFace, No TensorFlow, No SciPy.
-# Fully compatible with Streamlit Cloud.
-
+import streamlit as st
 import os
-import cv2
 import numpy as np
 import pandas as pd
 from PIL import Image
-import face_recognition
-from sklearn.cluster import DBSCAN
+import io
 import time
 
-DB_PATH = "student_db"
-META_CSV = os.path.join(DB_PATH, "metadata.csv")
-EMB_NPZ = os.path.join(DB_PATH, "embeddings.npz")
+from utils import (
+    enroll_student,
+    list_students,
+    set_mandatory,
+    rebuild_embeddings_index,
+    load_embeddings_index,
+    extract_frames_from_video,
+    process_frames_for_faces,
+    match_embedding,
+    deduplicate_matches,
+    cluster_unknown_embeddings,
+    generate_attendance
+)
 
-os.makedirs(DB_PATH, exist_ok=True)
+os.makedirs("student_db", exist_ok=True)
 
-# Distance threshold (Your selection)
-THRESHOLD = 0.65
+st.set_page_config(page_title="Smart Attendance (Face Recognition)", layout="wide")
+st.title("📘 Smart Attendance System — Face Recognition (No DeepFace)")
 
 
-# --------------------------------------------------------
+# Sidebar
+menu = st.sidebar.selectbox(
+    "Menu",
+    ["Home", "Enrollment", "Manage Students", "Take Attendance (Photo/Video)", "Real-time Processing"]
+)
+
+
+# -------------------------------------------------------------
+# HOME
+# -------------------------------------------------------------
+if menu == "Home":
+    st.header("Welcome to the Smart Attendance System")
+    st.markdown("""
+### Key Features
+- Face Recognition using **dlib** (safe for Streamlit Cloud)
+- Photo / Video attendance
+- Real-time-like processing
+- Enrollment from upload or camera
+- Mandatory attendance marking
+- Excel export  
+- Zero heavy dependencies  
+- No TensorFlow, No DeepFace, No SciPy  
+    """)
+
+
+# -------------------------------------------------------------
 # ENROLLMENT
-# --------------------------------------------------------
-def enroll_student(student_id: str, name: str, image_path: str):
-    """
-    Save student image and update metadata, then re-generate embeddings.
-    """
-    filename = f"{student_id}__{name.replace(' ', '_')}.jpg"
-    dest = os.path.join(DB_PATH, filename)
+# -------------------------------------------------------------
+if menu == "Enrollment":
+    st.header("Enroll a Student")
 
-    img = Image.open(image_path).convert("RGB")
-    img.save(dest)
+    sid = st.text_input("Student ID")
+    name = st.text_input("Full Name")
 
-    # Update metadata CSV
-    if os.path.exists(META_CSV):
-        df = pd.read_csv(META_CSV)
-    else:
-        df = pd.DataFrame(columns=["student_id", "name", "filename", "mandatory"])
+    uploaded_img = st.file_uploader("Upload a photo", type=["jpg", "jpeg", "png"])
+    cam_img = st.camera_input("Or capture a photo")
 
-    df = df[df["student_id"] != str(student_id)]  # remove old
-    df = pd.concat([
-        df,
-        pd.DataFrame([{
-            "student_id": str(student_id),
-            "name": name,
-            "filename": filename,
-            "mandatory": False
-        }])
-    ], ignore_index=True)
+    if st.button("Enroll Student"):
+        if not sid or not name:
+            st.warning("Student ID and name required.")
+        elif not uploaded_img and not cam_img:
+            st.warning("Please upload or capture a photo.")
+        else:
+            src = uploaded_img if uploaded_img else cam_img
+            tmp_path = f"tmp_enroll_{time.time()}.jpg"
+            with open(tmp_path, "wb") as f:
+                f.write(src.getbuffer())
 
-    df.to_csv(META_CSV, index=False)
+            enroll_student(sid, name, tmp_path)
+            os.remove(tmp_path)
 
-    # rebuild embeddings
-    rebuild_embeddings_index()
+            st.success(f"{name} enrolled successfully.")
+            st.info("Rebuilding embedding index...")
+            rebuild_embeddings_index()
+            st.success("Embedding index updated.")
 
 
-def list_students():
-    if os.path.exists(META_CSV):
-        return pd.read_csv(META_CSV)
-    return pd.DataFrame(columns=["student_id", "name", "filename", "mandatory"])
+# -------------------------------------------------------------
+# MANAGE STUDENTS
+# -------------------------------------------------------------
+if menu == "Manage Students":
+    st.header("Manage Student Records")
 
-
-def set_mandatory(student_id: str, value: bool):
     df = list_students()
-    if student_id in df["student_id"].values:
-        df.loc[df["student_id"] == student_id, "mandatory"] = value
-        df.to_csv(META_CSV, index=False)
-        return True
-    return False
-
-
-# --------------------------------------------------------
-# FACE DETECTION + ENCODING
-# --------------------------------------------------------
-def detect_and_encode(image):
-    """
-    Detect a face and generate a 128-D embedding.
-    Returns list of encodings.
-    """
-    # face_recognition expects RGB
-    rgb = image[:, :, ::-1]
-
-    boxes = face_recognition.face_locations(rgb, model="hog")  # fast, CPU-safe
-    if not boxes:
-        return []
-
-    encodings = face_recognition.face_encodings(rgb, boxes)
-    return encodings
-
-
-# --------------------------------------------------------
-# EMBEDDINGS INDEX
-# --------------------------------------------------------
-def rebuild_embeddings_index():
-    df = list_students()
-    all_embeddings = []
-    all_ids = []
-
-    for _, row in df.iterrows():
-        path = os.path.join(DB_PATH, row["filename"])
-
-        img = np.array(Image.open(path).convert("RGB"))
-        encs = detect_and_encode(img)
-        if not encs:
-            continue
-
-        # Save the first detected face
-        all_embeddings.append(encs[0])
-        all_ids.append(str(row["student_id"]))
-
-    if all_embeddings:
-        np.savez(EMB_NPZ, embeddings=np.vstack(all_embeddings), ids=np.array(all_ids))
+    if df.empty:
+        st.info("No students enrolled yet.")
     else:
-        if os.path.exists(EMB_NPZ):
-            os.remove(EMB_NPZ)
+        st.dataframe(df)
+
+        st.subheader("Set Mandatory Students")
+
+        changed = False
+        for _, row in df.iterrows():
+            sid = row["student_id"]
+            current = bool(row["mandatory"])
+            new = st.checkbox(f"{sid} – {row['name']}", value=current)
+            if new != current:
+                set_mandatory(sid, new)
+                changed = True
+
+        if changed:
+            st.success("Mandatory list updated.")
+            st.experimental_rerun()
 
 
-def load_embeddings_index():
-    if os.path.exists(EMB_NPZ):
-        data = np.load(EMB_NPZ, allow_pickle=True)
-        return data["embeddings"], data["ids"]
-    return None, None
+# -------------------------------------------------------------
+# TAKE ATTENDANCE (PHOTO / VIDEO)
+# -------------------------------------------------------------
+if menu == "Take Attendance (Photo/Video)":
+    st.header("Take Attendance")
+
+    uploaded_photo = st.file_uploader("Upload class photo", type=["jpg", "jpeg", "png"])
+    cam_photo = st.camera_input("Capture class photo")
+    uploaded_video = st.file_uploader("Upload class video", type=["mp4", "mov"])
+
+    sample_rate = st.number_input("Video sampling rate (every N frames)", 1, 30, 8)
+
+    frames = None
+    image_arr = None
+
+    # Handle Photo
+    if uploaded_photo:
+        image_arr = np.array(Image.open(uploaded_photo).convert("RGB"))
+        st.image(uploaded_photo)
+
+    elif cam_photo:
+        image_arr = np.array(Image.open(cam_photo).convert("RGB"))
+        st.image(cam_photo)
+
+    # Handle Video
+    elif uploaded_video:
+        tmpvid = f"tmpvid_{time.time()}.mp4"
+        with open(tmpvid, "wb") as f:
+            f.write(uploaded_video.getbuffer())
+
+        st.info("Extracting frames...")
+        frames = extract_frames_from_video(tmpvid, sample_rate)
+        os.remove(tmpvid)
+
+        st.success(f"Extracted {len(frames)} frames")
+
+        if frames:
+            st.image(frames[len(frames)//2][:,:,::-1], caption="Sample frame")
+
+    # Run attendance
+    if (image_arr is not None or frames is not None) and st.button("Run Attendance"):
+        embeddings_db, ids_db = load_embeddings_index()
+        meta = list_students()
+
+        if meta.empty:
+            st.warning("No students enrolled yet.")
+        else:
+            if image_arr is not None:
+                processed = process_frames_for_faces([image_arr[:, :, ::-1]])
+            else:
+                processed = process_frames_for_faces(frames)
+
+            matched = []
+            unknown = []
+
+            for r in processed:
+                emb = r["embedding"]
+                sid, dist = match_embedding(emb, embeddings_db, ids_db)
+
+                if sid:
+                    matched.append({"student_id": sid, "distance": dist})
+                else:
+                    unknown.append(emb)
+
+            matched = deduplicate_matches(matched)
+            clusters = cluster_unknown_embeddings(unknown)
+
+            att_df = generate_attendance(meta, matched)
+
+            st.subheader("Attendance Result")
+            st.dataframe(att_df)
+
+            # Download Excel
+            buf = io.BytesIO()
+            att_df.to_excel(buf, index=False)
+            buf.seek(0)
+            st.download_button("Download Excel", buf, "attendance.xlsx")
+
+            st.info(f"Recognized Students: {len(matched)}")
+            st.info(f"Unknown Face Clusters: {len(clusters)}")
 
 
-# --------------------------------------------------------
-# MATCHING
-# --------------------------------------------------------
-def match_embedding(embedding, embeddings_db, ids_db, threshold=THRESHOLD):
-    """
-    Finds the closest face from DB using Euclidean distance.
-    """
-    if embeddings_db is None:
-        return None, None
+# -------------------------------------------------------------
+# REAL-TIME-LIKE VIDEO PROCESSING
+# -------------------------------------------------------------
+if menu == "Real-time Processing":
+    st.header("Real-Time-like Processing (Video Upload)")
 
-    distances = np.linalg.norm(embeddings_db - embedding, axis=1)
-    idx = np.argmin(distances)
-    best_dist = distances[idx]
+    uploaded_video = st.file_uploader("Upload a video", type=["mp4", "mov"])
 
-    if best_dist <= threshold:
-        return ids_db[idx], best_dist
-    return None, best_dist
+    if uploaded_video:
+        tmpvid = f"tmp_rt_{time.time()}.mp4"
+        with open(tmpvid, "wb") as f:
+            f.write(uploaded_video.getbuffer())
 
+        sample_rate = st.number_input("Sample every N frames", 1, 30, 5)
 
-# --------------------------------------------------------
-# VIDEO FRAME EXTRACTION
-# --------------------------------------------------------
-def extract_frames_from_video(video_path, sample_rate=8):
-    frames = []
-    cap = cv2.VideoCapture(video_path)
-    index = 0
+        st.info("Sampling frames...")
+        frames = extract_frames_from_video(tmpvid, sample_rate)
+        os.remove(tmpvid)
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        if index % sample_rate == 0:
-            frames.append(frame)
-        index += 1
+        total = len(frames)
+        st.success(f"Frames extracted: {total}")
 
-    cap.release()
-    return frames
+        embeddings_db, ids_db = load_embeddings_index()
 
+        matched_all = []
+        unknown = []
 
-# --------------------------------------------------------
-# PROCESS FRAMES: DETECT + ENCODE
-# --------------------------------------------------------
-def process_frames_for_faces(frames):
-    results = []
-    for i, frame in enumerate(frames):
-        encs = detect_and_encode(frame)
-        for e in encs:
-            results.append({"frame_idx": i, "embedding": e})
-    return results
+        progress = st.progress(0)
 
+        for idx, frame in enumerate(frames):
+            processed = process_frames_for_faces([frame])
 
-# --------------------------------------------------------
-# DEDUPLICATE MATCHES
-# --------------------------------------------------------
-def deduplicate_matches(matches):
-    """
-    Removes repeated students across frames.
-    """
-    seen = {}
-    for m in matches:
-        sid = m["student_id"]
-        if sid not in seen:
-            seen[sid] = m
-    return list(seen.values())
+            for r in processed:
+                emb = r["embedding"]
+                sid, dist = match_embedding(emb, embeddings_db, ids_db)
 
+                if sid:
+                    matched_all.append({"student_id": sid, "distance": dist})
+                else:
+                    unknown.append(emb)
 
-# --------------------------------------------------------
-# UNKNOWN CLUSTERING
-# --------------------------------------------------------
-def cluster_unknown_embeddings(emb_list):
-    if not emb_list:
-        return []
+            progress.progress(int((idx+1)/total*100))
 
-    X = np.vstack(emb_list)
-    clustering = DBSCAN(eps=0.7, min_samples=2).fit(X)
+        matched = deduplicate_matches(matched_all)
+        clusters = cluster_unknown_embeddings(unknown)
 
-    clusters = {}
-    for i, label in enumerate(clustering.labels_):
-        clusters.setdefault(label, []).append(i)
+        att_df = generate_attendance(list_students(), matched)
+        st.dataframe(att_df)
 
-    return clusters
+        buf = io.BytesIO()
+        att_df.to_excel(buf, index=False)
+        buf.seek(0)
+        st.download_button("Download Excel", buf, "attendance.xlsx")
 
-
-# --------------------------------------------------------
-# ATTENDANCE GENERATION
-# --------------------------------------------------------
-def generate_attendance(meta_df, matched):
-    matched_ids = [m["student_id"] for m in matched]
-    dist_map = {m["student_id"]: m["distance"] for m in matched}
-
-    rows = []
-    for _, r in meta_df.iterrows():
-        sid = str(r["student_id"])
-        present = sid in matched_ids
-
-        rows.append({
-            "student_id": sid,
-            "name": r["name"],
-            "mandatory": bool(r["mandatory"]),
-            "status": "Present" if present else "Absent",
-            "distance": dist_map.get(sid)
-        })
-
-    return pd.DataFrame(rows)
+        st.info(f"Recognized: {len(matched)}")
+        st.info(f"Unknown clusters: {len(clusters)}")

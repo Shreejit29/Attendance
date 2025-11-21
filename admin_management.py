@@ -1,4 +1,5 @@
 # admin_management.py
+
 import streamlit as st
 import pandas as pd
 import os
@@ -8,7 +9,7 @@ from storage import load_students, save_students
 
 
 # ---------------------------------------------------------
-# FILE PATHS
+# PATHS
 # ---------------------------------------------------------
 DATA_DIR = "data_admin"
 TEACHERS_FILE = os.path.join(DATA_DIR, "teachers.json")
@@ -23,7 +24,7 @@ def ensure_dirs():
 
 
 # ---------------------------------------------------------
-# JSON LOAD/SAVE HELPERS
+# JSON HANDLERS
 # ---------------------------------------------------------
 def load_json(path, default):
     ensure_dirs()
@@ -43,7 +44,7 @@ def save_json(path, data):
 
 
 # ---------------------------------------------------------
-# STUDENT REMOVAL
+# STUDENT MANAGEMENT
 # ---------------------------------------------------------
 def delete_student(student_id):
     students = load_students()
@@ -56,16 +57,21 @@ def student_management_ui():
 
     students = load_students()
     if not students:
-        st.info("No students registered yet.")
+        st.info("No students found.")
         return
 
     df = pd.DataFrame(students)
     st.dataframe(df[["id", "name"]])
 
-    student_id = st.selectbox("Select student to delete:", [s["id"] for s in students])
-    if st.button("❌ Delete Student"):
+    student_id = st.selectbox(
+        "Select student to delete",
+        [s["id"] for s in students],
+        key="delete_student_select"
+    )
+
+    if st.button("❌ Delete Student", key="delete_student_button"):
         delete_student(student_id)
-        st.success("Student removed successfully!")
+        st.success("Student removed.")
 
 
 # ---------------------------------------------------------
@@ -82,21 +88,21 @@ def teacher_management_ui():
     else:
         st.info("No teachers added.")
 
-    st.write("### Add New Teacher")
-    tid = st.text_input("Teacher ID")
-    name = st.text_input("Teacher Name")
+    st.write("### Add Teacher")
+    tid = st.text_input("Teacher ID", key="teacher_id")
+    name = st.text_input("Teacher Name", key="teacher_name")
 
-    if st.button("Add Teacher"):
+    if st.button("Add Teacher", key="teacher_add_button"):
         if tid and name:
             teachers.append({"id": tid, "name": name})
             save_json(TEACHERS_FILE, teachers)
-            st.success("Teacher added!")
+            st.success("Teacher added.")
         else:
-            st.error("Enter Teacher ID & Name")
+            st.error("Enter ID & Name.")
 
 
 # ---------------------------------------------------------
-# TIMETABLE & LECTURE SLOT MANAGEMENT
+# TIMETABLE MANAGEMENT
 # ---------------------------------------------------------
 def timetable_ui():
     st.subheader("📅 Timetable Management")
@@ -106,13 +112,17 @@ def timetable_ui():
     st.write("### Current Timetable")
     st.json(timetable)
 
-    class_name = st.text_input("Class Name")
-    subject = st.text_input("Subject")
-    teacher = st.text_input("Teacher Name")
-    day = st.selectbox("Day", ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"])
-    slot = st.text_input("Lecture Slot (e.g., 10:00-11:00)")
+    class_name = st.text_input("Class", key="tt_class")
+    subject = st.text_input("Subject", key="tt_subject")
+    teacher = st.text_input("Teacher", key="tt_teacher")
+    day = st.selectbox(
+        "Day",
+        ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"],
+        key="tt_day"
+    )
+    slot = st.text_input("Lecture Slot (e.g. 9am–10am)", key="tt_slot")
 
-    if st.button("Add to Timetable"):
+    if st.button("Add Entry", key="tt_add_button"):
         if class_name:
             timetable.setdefault(class_name, [])
             timetable[class_name].append({
@@ -122,7 +132,9 @@ def timetable_ui():
                 "slot": slot
             })
             save_json(TIMETABLE_FILE, timetable)
-            st.success("Timetable entry added!")
+            st.success("Timetable updated.")
+        else:
+            st.error("Enter class name.")
 
 
 # ---------------------------------------------------------
@@ -139,25 +151,26 @@ def lecture_slots_ui():
     else:
         st.info("No slots defined.")
 
-    st.write("### Add New Slot")
-    slot_name = st.text_input("Slot Name (e.g., Morning Lecture)")
-    slot_time = st.text_input("Time (e.g., 10:00 AM – 11:00 AM)")
+    slot_name = st.text_input("Slot Name", key="slot_name")
+    slot_time = st.text_input("Time (e.g. 10am–11am)", key="slot_time")
 
-    if st.button("Add Slot"):
+    if st.button("Add Slot", key="slot_add_button"):
         if slot_name and slot_time:
             slots.append({"slot": slot_name, "time": slot_time})
             save_json(SLOTS_FILE, slots)
-            st.success("Slot added!")
+            st.success("Slot added.")
+        else:
+            st.error("Enter both fields.")
 
 
 # ---------------------------------------------------------
-# ATTENDANCE HISTORY SAVING
+# ATTENDANCE HISTORY
 # ---------------------------------------------------------
 def save_attendance_history(df, class_name, subject):
     ensure_dirs()
     today = datetime.now().strftime("%Y-%m-%d")
-    fname = f"{class_name}_{subject}_{today}.xlsx"
-    path = os.path.join(HISTORY_DIR, fname)
+    file_name = f"{class_name}_{subject}_{today}.xlsx"
+    path = os.path.join(HISTORY_DIR, file_name)
     df.to_excel(path, index=False)
     return path
 
@@ -169,12 +182,12 @@ def attendance_history_ui():
     files = os.listdir(HISTORY_DIR)
 
     if not files:
-        st.info("No attendance history saved yet.")
+        st.info("No attendance history saved.")
         return
 
-    selected = st.selectbox("Select attendance file", files)
+    selected = st.selectbox("Select file", files, key="history_select")
 
-    if st.button("Load Attendance File"):
+    if st.button("Load History", key="history_load_button"):
         df = pd.read_excel(os.path.join(HISTORY_DIR, selected))
         st.dataframe(df)
 
@@ -183,14 +196,14 @@ def attendance_history_ui():
 # ADMIN PANEL (MASTER UI)
 # ---------------------------------------------------------
 def admin_panel_ui(final_df=None, class_name="", subject=""):
-    st.header("🛠 Admin Control Panel")
+    st.header("🛠 Admin Panel")
 
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "Students",
         "Teachers",
         "Timetable",
         "Lecture Slots",
-        "Attendance History"
+        "History"
     ])
 
     with tab1:
@@ -208,8 +221,8 @@ def admin_panel_ui(final_df=None, class_name="", subject=""):
     with tab5:
         attendance_history_ui()
 
-    # save attendance if available
+    # Save attendance to history
     if final_df is not None:
-        if st.button("💾 Save Attendance to History"):
+        if st.button("💾 Save Attendance to History", key="history_save_button"):
             path = save_attendance_history(final_df, class_name, subject)
             st.success(f"Saved to: {path}")

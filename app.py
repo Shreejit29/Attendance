@@ -36,16 +36,39 @@ st.title("📘 Smart Attendance System")
 # LOGIN SYSTEM
 # ------------------------------
 # LOGIN SYSTEM
+# LOGIN SYSTEM
 if "user" not in st.session_state:
     st.session_state.user = None
 
-if st.session_state.user is None:
+if "show_signup" not in st.session_state:
+    st.session_state.show_signup = False
+
+
+# -------------------
+#  SHOW SIGNUP SCREEN
+# -------------------
+if st.session_state.show_signup:
+    from signup import signup_ui
+    signup_ui()
+
+    if st.button("⬅ Back to Login"):
+        st.session_state.show_signup = False
+        st.rerun()
+
+    st.stop()
+
+
+# -------------------
+#  NORMAL LOGIN SCREEN
+# -------------------
+if st.session_state.user is None and not st.session_state.show_signup:
     st.subheader("🔐 Login")
 
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
 
     if st.button("Login"):
+        from auth import login_user
         user = login_user(username, password)
         if user:
             st.session_state.user = user
@@ -57,8 +80,10 @@ if st.session_state.user is None:
     st.markdown("---")
     st.write("Don't have an account?")
     if st.button("Create New Account"):
-        signup_ui()
-        st.stop()
+        st.session_state.show_signup = True
+        st.rerun()
+
+    st.stop()
 
     st.stop()
 

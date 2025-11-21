@@ -1,38 +1,84 @@
+# storage.py
+
+import json
 import os
-import pickle
 
-DATA_DIR = "data"
-FILE = os.path.join(DATA_DIR, "students.pkl")
+STUDENTS_FILE = "students.json"
 
-def ensure():
-    os.makedirs(DATA_DIR, exist_ok=True)
-
+# ---------------------------------------------------------
+# LOAD STUDENTS
+# ---------------------------------------------------------
 def load_students():
-    ensure()
-    if not os.path.exists(FILE):
+    """Load all students from JSON file."""
+    if not os.path.exists(STUDENTS_FILE):
         return []
-    with open(FILE, "rb") as f:
-        return pickle.load(f)
 
-def save_students(data):
-    ensure()
-    with open(FILE, "wb") as f:
-        pickle.dump(data, f)
+    try:
+        with open(STUDENTS_FILE, "r") as f:
+            students = json.load(f)
+    except:
+        return []
 
-def add_student(sid, name, embedding):
-    data = load_students()
+    # Ensure compatibility with older versions (which didn't have programme & class)
+    for s in students:
+        if "programme" not in s:
+            s["programme"] = ""
+        if "class" not in s:
+            s["class"] = ""
+        if "embeddings" not in s:
+            s["embeddings"] = []
 
-    for s in data:
+    return students
+
+
+# ---------------------------------------------------------
+# SAVE STUDENTS
+# ---------------------------------------------------------
+def save_students(students):
+    """Save students list to file."""
+    with open(STUDENTS_FILE, "w") as f:
+        json.dump(students, f, indent=4)
+
+
+# ---------------------------------------------------------
+# ADD NEW STUDENT
+# ---------------------------------------------------------
+def add_student(sid, name, programme, student_class, embedding):
+    """
+    Add a new student.
+    New fields added:
+    - programme
+    - class
+    """
+    students = load_students()
+
+    # If student exists, update embedding instead of duplicating
+    for s in students:
         if s["id"] == sid:
+            s["name"] = name
+            s["programme"] = programme
+            s["class"] = student_class
             s["embeddings"].append(embedding)
-            save_students(data)
+            save_students(students)
             return
 
-    data.append({
+    # Add new student
+    students.append({
         "id": sid,
         "name": name,
+        "programme": programme,
         "class": student_class,
         "embeddings": [embedding]
-        "embeddings": [embedding]
     })
-    save_students(data)
+
+    save_students(students)
+
+
+# ---------------------------------------------------------
+# REMOVE STUDENT (USED BY ADMIN PANEL)
+# ---------------------------------------------------------
+def delete_student_by_id(student_id):
+    """Delete a student by ID."""
+    students = load_students()
+    new_list = [s for s in students if s["id"] != student_id]
+    save_students(new_list)

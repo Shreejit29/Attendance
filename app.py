@@ -51,9 +51,8 @@ def top_bar():
             if st.button("Logout"):
                 st.session_state.user = None
                 st.session_state.show_signup = False
-                st.experimental_rerun()
-
-
+                # NO experimental_rerun here
+                st.stop()   # stop execution → Streamlit safely reruns
 # -----------------------------------------------------------
 # SIGNUP UI (Plan B: Students upload or capture a photo)
 # -----------------------------------------------------------

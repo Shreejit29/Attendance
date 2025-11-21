@@ -3,6 +3,11 @@ import pandas as pd
 from io import BytesIO
 from datetime import datetime
 
+# AUTH & ROLE SYSTEM
+from auth import login_user
+from student_portal import student_portal
+from teacher_portal import teacher_portal
+
 # Internal modules
 from face_utils import (
     load_image_from_bytes,
@@ -19,15 +24,68 @@ from admin_management import admin_panel_ui
 from dashboard import dashboard_ui
 
 
-st.title("📘 Smart Attendance System (Final Version)")
+# ------------------------------
+# PAGE TITLE
+# ------------------------------
+st.title("📘 Smart Attendance System")
 
-mode = st.sidebar.selectbox("Menu", [
+
+# ------------------------------
+# LOGIN SYSTEM
+# ------------------------------
+if "user" not in st.session_state:
+    st.session_state.user = None
+
+if st.session_state.user is None:
+    st.subheader("🔐 Login")
+
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+
+    if st.button("Login"):
+        user = login_user(username, password)
+        if user:
+            st.session_state.user = user
+            st.success(f"Welcome {user['username']} ({user['role']})")
+            st.rerun()
+        else:
+            st.error("Invalid username or password")
+
+    st.stop()
+
+# If logged in:
+role = st.session_state.user["role"]
+username = st.session_state.user["username"]
+
+
+# ------------------------------
+# STUDENT DASHBOARD
+# ------------------------------
+if role == "student":
+    student_portal(username)
+    st.stop()
+
+
+# ------------------------------
+# TEACHER PORTAL
+# ------------------------------
+if role == "teacher":
+    teacher_portal(username)
+    st.stop()
+
+
+# ------------------------------
+# ADMIN MODE
+# ------------------------------
+st.sidebar.title("Admin Menu")
+mode = st.sidebar.selectbox("Choose Option", [
     "Register Student",
     "Take Attendance (Image)",
     "Take Attendance From Video",
     "Dashboard",
     "Admin Panel"
 ])
+
 
 # ---------------------------------------------------------
 # REGISTER STUDENT
@@ -115,7 +173,6 @@ if mode == "Take Attendance (Image)":
         final_df["Subject"] = details["subject"]
         final_df["Time"] = details["time"]
 
-        # Pass dataframe to admin panel (for saving attendance history)
         admin_panel_ui(final_df, details["class"], details["subject"])
 
         if st.button("Download Excel"):
@@ -155,7 +212,6 @@ if mode == "Take Attendance From Video":
         final_df["Subject"] = details["subject"]
         final_df["Time"] = details["time"]
 
-        # Admin panel receives attendance
         admin_panel_ui(final_df, details["class"], details["subject"])
 
         if st.button("Download Video Excel"):

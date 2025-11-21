@@ -31,6 +31,8 @@ def add_student(sid, name, embedding):
     data.append({
         "id": sid,
         "name": name,
+        "class": student_class,
+        "embeddings": [embedding]
         "embeddings": [embedding]
     })
     save_students(data)

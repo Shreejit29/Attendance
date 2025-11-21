@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 from io import BytesIO
 from datetime import datetime
+from signup import signup_ui
+from auth import login_user
 
 # AUTH & ROLE SYSTEM
 from auth import login_user
@@ -33,6 +35,7 @@ st.title("📘 Smart Attendance System")
 # ------------------------------
 # LOGIN SYSTEM
 # ------------------------------
+# LOGIN SYSTEM
 if "user" not in st.session_state:
     st.session_state.user = None
 
@@ -46,16 +49,19 @@ if st.session_state.user is None:
         user = login_user(username, password)
         if user:
             st.session_state.user = user
-            st.success(f"Welcome {user['username']} ({user['role']})")
+            st.success(f"Welcome, {user['username']} ({user['role']})")
             st.rerun()
         else:
             st.error("Invalid username or password")
 
+    st.markdown("---")
+    st.write("Don't have an account?")
+    if st.button("Create New Account"):
+        signup_ui()
+        st.stop()
+
     st.stop()
 
-# If logged in:
-role = st.session_state.user["role"]
-username = st.session_state.user["username"]
 
 
 # ------------------------------

@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-
 from face_utils import (
     load_image_from_bytes,
     get_face_embedding,
@@ -13,25 +12,20 @@ from storage import add_student, load_students
 from manual_attendance import manual_attendance_ui
 from class_selector import class_subject_time_selector
 from video_attendance import video_attendance_ui
-from admin_management import admin_panel_ui   # NEW ADMIN PANEL
+from admin_management import admin_panel_ui
+from dashboard import dashboard_ui
 
 from io import BytesIO
 from datetime import datetime
 
 
-# ---------------------------------------------------------
-# TITLE
-# ---------------------------------------------------------
-st.title("📘 FaceRoll-Smart Attendance App")
+st.title("📘 Smart Attendance System")
 
-
-# ---------------------------------------------------------
-# SIDEBAR MENU
-# ---------------------------------------------------------
 mode = st.sidebar.selectbox("Menu", [
     "Register Student",
     "Take Attendance (Image)",
     "Take Attendance From Video",
+    "Dashboard",
     "Admin Panel"
 ])
 
@@ -45,25 +39,40 @@ if mode == "Register Student":
     name = st.text_input("Student Name")
     sid = st.text_input("Student ID")
 
+    programme = st.selectbox("Programme", [
+        "BSc", "BA", "BCom", "MSc", "MA", "Custom"
+    ])
+
+    if programme == "Custom":
+        programme = st.text_input("Enter Programme")
+
+    student_class = st.text_input("Class (e.g., FYBSc, SYBSc, Division A)")
+
     upload = st.file_uploader("Upload student photo", type=["jpg","png"])
-    capture = st.camera_input("Or capture using camera")
+    capture = st.camera_input("Or capture photo")
 
     if st.button("Register"):
-        if not name or not sid:
-            st.error("Enter student name & ID")
+        if not name or not sid or not programme or not student_class:
+            st.error("Fill all fields.")
         else:
             src = capture or upload
             if not src:
-                st.error("Upload or capture a photo")
+                st.error("Upload or capture photo.")
             else:
                 img = load_image_from_bytes(src.getvalue())
                 emb = get_face_embedding(img)
 
                 if emb:
-                    add_student(sid, name, emb)
-                    st.success(f"Registered {name} ({sid}) successfully")
+                    add_student(
+                        sid=sid,
+                        name=name,
+                        programme=programme,
+                        student_class=student_class,
+                        embedding=emb
+                    )
+                    st.success(f"Registered {name} ({sid})")
                 else:
-                    st.error("No face detected. Try clearer image.")
+                    st.error("No face detected.")
 
 
 
@@ -76,22 +85,20 @@ if mode == "Take Attendance (Image)":
     details = class_subject_time_selector()
 
     upload = st.file_uploader("Upload class photo", type=["jpg","png"])
-    capture = st.camera_input("Or capture class photo")
+    capture = st.camera_input("Or capture")
 
     if upload or capture:
-        img = load_image_from_bytes((capture or upload).getvalue())
+        img = load_image_from_bytes((upload or capture).getvalue())
 
         detections = find_faces_in_image(img)
         students = load_students()
-
         present = {s["id"]: False for s in students}
+
         boxes, labels = [], []
 
-        # MATCHING
         for emb, box in detections:
             boxes.append(box)
-            best_name = "Unknown"
-            best_sim = 0
+            best_name, best_sim = "Unknown", 0
 
             for s in students:
                 for st_emb in s["embeddings"]:
@@ -103,17 +110,17 @@ if mode == "Take Attendance (Image)":
 
             labels.append(best_name)
 
-        # DISPLAY RESULTS
-        out = draw_boxes(img, boxes, labels)
-        st.image(out, caption="Detected Students", use_column_width=True)
-
-        st.subheader("Session Details")
-        st.write(f"**Class:** {details['class']}")
-        st.write(f"**Subject:** {details['subject']}")
-        st.write(f"**Time:** {details['time']}")
+        out_img = draw_boxes(img, boxes, labels)
+        st.image(out_img, use_column_width=True)
 
         auto_df = pd.DataFrame([
-            {"Student ID": s["id"], "Name": s["name"], "Present": present[s["id"]]}
+            {
+                "Student ID": s["id"],
+                "Name": s["name"],
+                "Class": s.get("class", ""),
+                "Programme": s.get("programme", ""),
+                "Present": present[s["id"]]
+            }
             for s in students
         ])
 
@@ -123,24 +130,17 @@ if mode == "Take Attendance (Image)":
         st.subheader("Manual Correction")
         final_df = manual_attendance_ui(students, present)
 
-        st.subheader("Final Attendance Sheet")
-        st.dataframe(final_df)
+        final_df["Class"] = details["class"]
+        final_df["Subject"] = details["subject"]
+        final_df["Time"] = details["time"]
 
         if st.button("Download Excel"):
             buf = BytesIO()
-
-            final_df["Class"] = details["class"]
-            final_df["Subject"] = details["subject"]
-            final_df["Time"] = details["time"]
-
             final_df.to_excel(buf, index=False)
             buf.seek(0)
 
-            st.download_button(
-                "Download Attendance File",
-                data=buf,
-                file_name=f"attendance_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
-            )
+            st.download_button("Download File", data=buf,
+                               file_name="attendance_image.xlsx")
 
 
 
@@ -148,7 +148,7 @@ if mode == "Take Attendance (Image)":
 # TAKE ATTENDANCE FROM VIDEO
 # ---------------------------------------------------------
 if mode == "Take Attendance From Video":
-    st.header("🎥 Attendance From Uploaded Video")
+    st.header("🎥 Attendance From Video")
 
     details = class_subject_time_selector()
 
@@ -158,36 +158,45 @@ if mode == "Take Attendance From Video":
         students = load_students()
 
         df = pd.DataFrame([
-            {"Student ID": s["id"], "Name": s["name"], "Present": present[s["id"]]}
+            {
+                "Student ID": s["id"],
+                "Name": s["name"],
+                "Class": s.get("class", ""),
+                "Programme": s.get("programme", ""),
+                "Present": present[s["id"]]
+            }
             for s in students
         ])
 
-        st.subheader("Automatic Attendance From Video")
+        st.subheader("Automatic Attendance")
         st.dataframe(df)
 
-        st.subheader("Manual Correction")
         final_df = manual_attendance_ui(students, present)
 
-        if st.button("Download Video Attendance"):
+        final_df["Class"] = details["class"]
+        final_df["Subject"] = details["subject"]
+        final_df["Time"] = details["time"]
+
+        if st.button("Download Video Excel"):
             buf = BytesIO()
-
-            final_df["Class"] = details["class"]
-            final_df["Subject"] = details["subject"]
-            final_df["Time"] = details["time"]
-
             final_df.to_excel(buf, index=False)
             buf.seek(0)
-
-            st.download_button(
-                "Download File",
-                data=buf,
-                file_name="video_attendance.xlsx"
-            )
+            st.download_button("Download File", data=buf,
+                               file_name="attendance_video.xlsx")
 
 
 
 # ---------------------------------------------------------
-# ADMIN PANEL (STUDENT + TEACHER + TIMETABLE + HISTORY)
+# DASHBOARD
+# ---------------------------------------------------------
+if mode == "Dashboard":
+    st.header("📊 Attendance Dashboard")
+    dashboard_ui()
+
+
+
+# ---------------------------------------------------------
+# ADMIN PANEL
 # ---------------------------------------------------------
 if mode == "Admin Panel":
     st.header("🛠 Admin Panel")

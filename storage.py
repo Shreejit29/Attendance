@@ -1,18 +1,25 @@
 import json
 import os
 
-STUDENTS_FILE = "data/students.json"
-ATTENDANCE_DIR = "data/attendance_history"
+DATA_DIR = "data"
+STUDENTS_FILE = os.path.join(DATA_DIR, "students.json")
+ATTENDANCE_DIR = os.path.join(DATA_DIR, "attendance_history")
 
-os.makedirs("data", exist_ok=True)
+os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(ATTENDANCE_DIR, exist_ok=True)
+
+# ensure file exists
+if not os.path.exists(STUDENTS_FILE):
+    with open(STUDENTS_FILE, "w") as f:
+        json.dump([], f)
 
 
 def load_students():
-    if not os.path.exists(STUDENTS_FILE):
+    try:
+        with open(STUDENTS_FILE, "r") as f:
+            return json.load(f)
+    except:
         return []
-    with open(STUDENTS_FILE, "r") as f:
-        return json.load(f)
 
 
 def save_students(students):

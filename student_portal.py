@@ -1,61 +1,53 @@
-# student_portal.py
+# student_portal.py  — Streamlit Storage API version
 
 import streamlit as st
 import pandas as pd
-import os
-
-HISTORY_DIR = "attendance_history"
 
 
 def student_portal(username):
     st.header(f"👨‍🎓 Student Portal — {username}")
 
     # ---------------------------------------------------------
-    # Load attendance history folder
+    # Load ALL attendance entries from permanent storage
     # ---------------------------------------------------------
-    if not os.path.exists(HISTORY_DIR):
-        st.info("No attendance history available.")
+    attendance_keys = st.storage.list("attendance/")
+
+    if not attendance_keys:
+        st.info("No attendance history available yet.")
         return
 
-    files = [f for f in os.listdir(HISTORY_DIR) if f.endswith(".xlsx")]
-    if not files:
-        st.info("No attendance history found.")
+    all_records = []
+
+    for key in attendance_keys:
+        data = st.storage.read(key)
+        if data:
+            for rec in data:
+                rec["SourceKey"] = key
+            all_records.extend(data)
+
+    if len(all_records) == 0:
+        st.info("No stored attendance found.")
         return
 
-    # ---------------------------------------------------------
-    # Load all attendance files
-    # ---------------------------------------------------------
-    all_data = []
-    for f in files:
-        try:
-            df = pd.read_excel(os.path.join(HISTORY_DIR, f))
-            df["Source File"] = f  # allow filter by date
-            all_data.append(df)
-        except:
-            continue
-
-    if len(all_data) == 0:
-        st.info("No readable attendance files found.")
-        return
-
-    df = pd.concat(all_data, ignore_index=True)
+    df = pd.DataFrame(all_records)
 
     # ---------------------------------------------------------
-    # Fix column mismatches (important)
+    # Ensure column support
     # ---------------------------------------------------------
-    # Old system column: "Present"
-    # New system column: "Present (Final)"
     present_col = None
     if "Present (Final)" in df.columns:
         present_col = "Present (Final)"
     elif "Present" in df.columns:
         present_col = "Present"
     else:
-        st.error("Attendance file missing Present/Present (Final) column.")
+        st.error("Attendance data missing Present/Present (Final) column.")
         return
 
+    # Extract date from key → "attendance/Class_Subject_YYYY-MM-DD"
+    df["Date"] = df["SourceKey"].apply(lambda k: k.split("_")[-1] if "_" in k else "")
+
     # ---------------------------------------------------------
-    # Filter only student's attendance
+    # Filter only this student's data
     # ---------------------------------------------------------
     df_student = df[df["Name"] == username]
 
@@ -63,27 +55,25 @@ def student_portal(username):
     st.dataframe(df_student)
 
     if df_student.empty:
-        st.warning("No attendance entries found for you yet.")
+        st.warning("No attendance records found for your username.")
         return
 
     # ---------------------------------------------------------
-    # Calculate attendance percentage
+    # Calculate Attendance %
     # ---------------------------------------------------------
     percent = df_student[present_col].mean() * 100
-
     st.metric("Attendance Percentage", f"{percent:.2f}%")
 
     # ---------------------------------------------------------
-    # Additional Analysis
+    # Subject-wise Summary
     # ---------------------------------------------------------
-    st.subheader("📅 Subject-wise Attendance Summary")
-
     if "Subject" in df_student.columns:
-        subject_summary = df_student.groupby("Subject")[present_col].mean() * 100
-        st.table(subject_summary.map(lambda x: f"{x:.1f}%"))
+        st.subheader("📚 Subject-wise Attendance")
+        sub_summary = df_student.groupby("Subject")[present_col].mean() * 100
+        st.table(sub_summary.map(lambda x: f"{x:.1f}%"))
 
     # ---------------------------------------------------------
-    # Class-wise summary
+    # Class-wise Summary
     # ---------------------------------------------------------
     if "Class" in df_student.columns:
         st.subheader("🏫 Class-wise Attendance")
@@ -91,14 +81,18 @@ def student_portal(username):
         st.table(class_summary.map(lambda x: f"{x:.1f}%"))
 
     # ---------------------------------------------------------
-    # Timeline view
+    # Timeline Chart
     # ---------------------------------------------------------
     st.subheader("📅 Attendance Over Time")
-    if "Date" in df_student.columns:
-        try:
-            df_student["Date"] = pd.to_datetime(df_student["Date"])
-            st.line_chart(df_student.sort_values("Date").set_index("Date")[present_col])
-        except:
-            st.info("Date column not properly formatted.")
+
+    try:
+        df_student["Date"] = pd.to_datetime(df_student["Date"], errors="coerce")
+        df_sorted = df_student.sort_values("Date")
+
+        st.line_chart(
+            df_sorted.set_index("Date")[present_col]
+        )
+    except:
+        st.info("Timeline unavailable (date format issue).")
 
     st.success("Student portal loaded successfully!")

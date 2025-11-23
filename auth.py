@@ -1,60 +1,65 @@
-import json
-import os
+# ============================================================
+# auth.py — FINAL STORAGE API VERSION
+# ============================================================
+
+import streamlit as st
 import hashlib
 
-# permanent storage location
-DATA_DIR = "data"
-USERS_FILE = os.path.join(DATA_DIR, "users.json")
-
-# ensure folders exist
-os.makedirs(DATA_DIR, exist_ok=True)
-
-# ensure file exists
-if not os.path.exists(USERS_FILE):
-    with open(USERS_FILE, "w") as f:
-        json.dump([], f)
+# Storage key
+USERS_KEY = "users"
 
 
-def load_users():
-    try:
-        with open(USERS_FILE, "r") as f:
-            return json.load(f)
-    except:
-        return []
+# ------------------------------------------------------------
+# Internal helpers
+# ------------------------------------------------------------
+
+def _load_users():
+    """Load users list from permanent storage."""
+    users = st.storage.read(USERS_KEY)
+    return users if users else []
 
 
-def save_users(users):
-    with open(USERS_FILE, "w") as f:
-        json.dump(users, f, indent=4)
+def _save_users(users):
+    st.storage.write(USERS_KEY, users)
 
 
-def hash_password(pwd):
+def _hash_password(pwd: str) -> str:
     return hashlib.sha256(pwd.encode()).hexdigest()
 
 
-def create_user(username, password, role, programme="", student_class=""):
-    users = load_users()
+# ------------------------------------------------------------
+# Create User
+# ------------------------------------------------------------
 
-    # check if exists
+def create_user(username, password, role, programme="", student_class=""):
+    users = _load_users()
+
+    # Check duplicate username
     for u in users:
         if u["username"] == username:
             return False, "Username already exists"
 
-    users.append({
+    new_user = {
         "username": username,
-        "password": hash_password(password),
+        "password": _hash_password(password),
         "role": role,
         "programme": programme,
         "class": student_class
-    })
+    }
 
-    save_users(users)
+    users.append(new_user)
+    _save_users(users)
+
     return True, "User created successfully"
 
 
+# ------------------------------------------------------------
+# Login User
+# ------------------------------------------------------------
+
 def login_user(username, password):
-    users = load_users()
-    hashed = hash_password(password)
+    users = _load_users()
+    hashed = _hash_password(password)
 
     for u in users:
         if u["username"] == username and u["password"] == hashed:

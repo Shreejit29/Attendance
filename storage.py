@@ -26,20 +26,24 @@ def save_students(students):
     with open(STUDENTS_FILE, "w") as f:
         json.dump(students, f, indent=4)
 
-
 def add_student(sid, name, programme, student_class, embedding):
     students = load_students()
+
+    # If embedding is a list of multiple embeddings
+    if isinstance(embedding, list):
+        embed_list = embedding
+    else:
+        embed_list = [embedding]
 
     students.append({
         "id": sid,
         "name": name,
         "programme": programme,
         "class": student_class,
-        "embeddings": [embedding]
+        "embeddings": embed_list
     })
 
     save_students(students)
-
 
 def delete_student_by_id(sid):
     students = load_students()

@@ -8,12 +8,15 @@ ATTENDANCE_DIR = os.path.join(DATA_DIR, "attendance_history")
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(ATTENDANCE_DIR, exist_ok=True)
 
-# ensure file exists
+# Ensure file exists
 if not os.path.exists(STUDENTS_FILE):
     with open(STUDENTS_FILE, "w") as f:
-        json.dump([], f)
+        json.dump([], f, indent=4)
 
 
+# ------------------------------------------------------------
+# LOAD / SAVE STUDENTS
+# ------------------------------------------------------------
 def load_students():
     try:
         with open(STUDENTS_FILE, "r") as f:
@@ -26,26 +29,90 @@ def save_students(students):
     with open(STUDENTS_FILE, "w") as f:
         json.dump(students, f, indent=4)
 
-def add_student(sid, name, programme, student_class, embedding):
+
+# ------------------------------------------------------------
+# GET ONE STUDENT
+# ------------------------------------------------------------
+def get_student_by_id(sid):
+    students = load_students()
+    for s in students:
+        if s["id"] == sid:
+            return s
+    return None
+
+
+# ------------------------------------------------------------
+# ADD NEW STUDENT (Supports MULTIPLE EMBEDDINGS)
+# ------------------------------------------------------------
+def add_student(sid, name, programme, student_class, embeddings):
     students = load_students()
 
-    # If embedding is a list of multiple embeddings
-    if isinstance(embedding, list):
-        embed_list = embedding
-    else:
-        embed_list = [embedding]
+    # Convert single embedding to list
+    if isinstance(embeddings, dict):
+        embeddings = [embeddings]
+    if isinstance(embeddings, list) and isinstance(embeddings[0], (float, int)):
+        embeddings = [embeddings]
 
+    # Prevent duplicate student ID
+    for s in students:
+        if s["id"] == sid:
+            # Instead of error, append new embeddings
+            s["embeddings"].extend(embeddings)
+            save_students(students)
+            return
+
+    # Add new student
     students.append({
         "id": sid,
         "name": name,
         "programme": programme,
-        "class": student_class,
-        "embeddings": embed_list
+        "student_class": student_class,
+        "embeddings": embeddings
     })
 
     save_students(students)
 
+
+# ------------------------------------------------------------
+# UPDATE STUDENT EMBEDDINGS (If adding more later)
+# ------------------------------------------------------------
+def update_student_embeddings(sid, new_embeddings):
+    students = load_students()
+
+    # Normalize
+    if isinstance(new_embeddings, dict):
+        new_embeddings = [new_embeddings]
+    if isinstance(new_embeddings, list) and isinstance(new_embeddings[0], (int, float)):
+        new_embeddings = [new_embeddings]
+
+    for s in students:
+        if s["id"] == sid:
+            s["embeddings"].extend(new_embeddings)
+            save_students(students)
+            return True
+
+    return False
+
+
+# ------------------------------------------------------------
+# DELETE STUDENT
+# ------------------------------------------------------------
 def delete_student_by_id(sid):
     students = load_students()
     students = [s for s in students if s["id"] != sid]
     save_students(students)
+
+
+# ------------------------------------------------------------
+# SAVE ATTENDANCE HISTORY
+# ------------------------------------------------------------
+def save_attendance(class_name, subject, df):
+    filename = f"{class_name}_{subject}.json"
+    path = os.path.join(ATTENDANCE_DIR, filename)
+
+    data = df.to_dict(orient="records")
+
+    with open(path, "w") as f:
+        json.dump(data, f, indent=4)
+
+    return path

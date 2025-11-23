@@ -1,40 +1,43 @@
-import json
-import os
+# ============================================================
+# storage.py — Permanent Storage using Streamlit Storage API
+# No JSON files. 100% Cloud-Safe. Never wiped on rerun.
+# ============================================================
 
-DATA_DIR = "data"
-STUDENTS_FILE = os.path.join(DATA_DIR, "students.json")
-ATTENDANCE_DIR = os.path.join(DATA_DIR, "attendance_history")
-
-# Ensure folders exist
-os.makedirs(DATA_DIR, exist_ok=True)
-os.makedirs(ATTENDANCE_DIR, exist_ok=True)
-
-# Ensure students file exists
-if not os.path.exists(STUDENTS_FILE):
-    with open(STUDENTS_FILE, "w") as f:
-        json.dump([], f, indent=4)
+import streamlit as st
 
 
 # ------------------------------------------------------------
-# LOAD / SAVE STUDENTS
+# Internal load/save wrappers
 # ------------------------------------------------------------
+
+def _load(key, default):
+    data = st.storage.read(key)
+    return data if data is not None else default
+
+
+def _save(key, value):
+    st.storage.write(key, value)
+
+
+# ============================================================
+# STUDENT STORAGE
+# ============================================================
+
+STUDENTS_KEY = "students"
+
+
 def load_students():
-    try:
-        with open(STUDENTS_FILE, "r") as f:
-            return json.load(f)
-    except:
-        return []
+    """Load all students from permanent storage."""
+    return _load(STUDENTS_KEY, [])
 
 
 def save_students(students):
-    with open(STUDENTS_FILE, "w") as f:
-        json.dump(students, f, indent=4)
+    """Save full student list."""
+    _save(STUDENTS_KEY, students)
 
 
-# ------------------------------------------------------------
-# GET ONE STUDENT
-# ------------------------------------------------------------
 def get_student_by_id(sid):
+    """Retrieve one student."""
     students = load_students()
     for s in students:
         if s["id"] == sid:
@@ -42,10 +45,9 @@ def get_student_by_id(sid):
     return None
 
 
-# ------------------------------------------------------------
-# ADD NEW STUDENT (supports multiple embeddings)
-# ------------------------------------------------------------
 def add_student(sid, name, programme, student_class, embeddings):
+    """Add new student OR append more embeddings to existing one."""
+
     students = load_students()
 
     # Normalize embeddings
@@ -54,31 +56,31 @@ def add_student(sid, name, programme, student_class, embeddings):
     if isinstance(embeddings, list) and isinstance(embeddings[0], (float, int)):
         embeddings = [embeddings]
 
-    # If student already exists → append embeddings
+    # Check if student exists → append embeddings
     for s in students:
         if s["id"] == sid:
             s["embeddings"].extend(embeddings)
             save_students(students)
             return
 
-    # Add new student
-    students.append({
+    # Create new student
+    new_student = {
         "id": sid,
         "name": name,
         "programme": programme,
         "student_class": student_class,
-        "embeddings": embeddings
-    })
+        "embeddings": embeddings,
+    }
 
+    students.append(new_student)
     save_students(students)
 
 
-# ------------------------------------------------------------
-# UPDATE STUDENT EMBEDDINGS
-# ------------------------------------------------------------
 def update_student_embeddings(sid, new_embeddings):
+    """Add more embeddings later."""
     students = load_students()
 
+    # Normalize
     if isinstance(new_embeddings, dict):
         new_embeddings = [new_embeddings]
     if isinstance(new_embeddings, list) and isinstance(new_embeddings[0], (float, int)):
@@ -93,14 +95,39 @@ def update_student_embeddings(sid, new_embeddings):
     return False
 
 
-# ------------------------------------------------------------
-# SAVE ATTENDANCE HISTORY
-# ------------------------------------------------------------
+def delete_student_by_id(sid):
+    """Remove student completely."""
+    students = load_students()
+    updated = [s for s in students if s["id"] != sid]
+    save_students(updated)
+
+
+# ============================================================
+# ATTENDANCE STORAGE
+# ============================================================
+
 def save_attendance(class_name, subject, df):
-    filename = f"{class_name}_{subject}.json"
-    path = os.path.join(ATTENDANCE_DIR, filename)
+    """
+    Save attendance record permanently using:
+    Key: attendance/<class>_<subject>_<date>
+    """
+    from datetime import datetime
 
-    with open(path, "w") as f:
-        json.dump(df.to_dict(orient="records"), f, indent=4)
+    today = datetime.now().strftime("%Y-%m-%d")
+    key = f"attendance/{class_name}_{subject}_{today}"
 
-    return path
+    st.storage.write(key, df.to_dict(orient="records"))
+
+    return key
+
+
+def load_all_attendance():
+    """Load all attendance entries as {key: data}."""
+    keys = st.storage.list("attendance/")
+    records = {}
+
+    for k in keys:
+        data = st.storage.read(k)
+        records[k] = data
+
+    return records

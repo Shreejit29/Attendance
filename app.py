@@ -55,11 +55,8 @@ def top_bar():
                 st.stop()
 
 
-# -----------------------------------------------------------
-# SIGNUP UI (Plan B: Students upload or capture a photo)
-# -----------------------------------------------------------
 def signup_ui():
-    st.header("🆕 Create Account (Students require face photo)")
+    st.header("🆕 Create Account (Students require face photos)")
 
     col1, col2 = st.columns([2, 1])
     with col1:
@@ -73,56 +70,85 @@ def signup_ui():
         if LOGO_PATH and st.button("Show Logo", key="signup_show_logo"):
             st.image(LOGO_PATH, use_column_width=True)
 
-    # Student photo requirement
-    photo = None
-    if role == "student":
-        st.write("📸 Please upload/capture a clear frontal face photo.")
-        upload = st.file_uploader("Upload Photo", type=["jpg","png"], key="signup_upload")
-        capture = st.camera_input("Or Capture Photo", key="signup_capture")
-        photo = capture or upload
+    # -----------------------------
+    # MULTI-IMAGE uploader for students
+    # -----------------------------
+    images = []
 
+    if role == "student":
+        st.write("### 📸 Upload or Capture MULTIPLE Photos")
+
+        uploads = st.file_uploader(
+            "Upload 1 or more photos",
+            type=["jpg", "png"],
+            accept_multiple_files=True,
+            key="signup_multi_upload"
+        )
+
+        if uploads:
+            for img_file in uploads:
+                images.append(load_image_from_bytes(img_file.getvalue()))
+
+        st.write("### OR Capture Multiple Photos")
+
+        cap1 = st.camera_input("Capture Photo 1", key="signup_cap1")
+        if cap1:
+            images.append(load_image_from_bytes(cap1.getvalue()))
+
+        cap2 = st.camera_input("Capture Photo 2 (Optional)", key="signup_cap2")
+        if cap2:
+            images.append(load_image_from_bytes(cap2.getvalue()))
+
+    # -----------------------------
+    # CREATE ACCOUNT
+    # -----------------------------
     if st.button("Create Account", key="signup_create"):
+        
+        # Basic validation
         if not username or not password:
             st.error("Username and password are required.")
             return
-
-        if role == "student" and not photo:
-            st.error("Students must provide a face photo.")
+        
+        # Student MUST submit at least one image
+        if role == "student" and len(images) == 0:
+            st.error("Students must upload or capture at least ONE face photo.")
             return
 
+        # Create the login user
         ok, msg = create_user(username, password, role, programme, student_class)
         if not ok:
             st.error(msg)
             return
 
-        # For students → register face (store as list of embeddings)
+        # -----------------------------------
+        # PROCESS STUDENT FACE IMAGES
+        # -----------------------------------
         if role == "student":
-            try:
-                img = load_image_from_bytes(photo.getvalue())
-            except:
-                st.error("Invalid image file.")
+            embeddings = []
+            for img in images:
+                emb = get_face_embedding(img)
+                if emb:
+                    embeddings.append(emb)
+
+            if len(embeddings) == 0:
+                st.error("No valid face detected in any uploaded images.")
                 return
 
-            emb = get_face_embedding(img)
-            if emb is None:
-                st.error("No face detected—use a clear frontal photo.")
-                return
-
-            # add_student expects embeddings; pass as list
+            # Save all embeddings
             add_student(
                 sid=username,
                 name=username,
                 programme=programme,
                 student_class=student_class,
-                embeddings=[emb]
+                embeddings=embeddings
             )
 
-            st.success("Student account + Face registration completed!")
+            st.success(f"Student registered successfully with {len(embeddings)} face samples!")
 
         else:
             st.success("Account created successfully!")
 
-        # Auto-login
+        # AUTO LOGIN
         st.session_state.user = {
             "username": username,
             "role": role,
@@ -132,7 +158,6 @@ def signup_ui():
 
         st.session_state.show_signup = False
         return
-
 
 # -----------------------------------------------------------
 # LOGIN UI

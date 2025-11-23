@@ -10,14 +10,19 @@ from face_utils import find_faces_in_image, cosine_similarity
 from storage import load_students
 
 
-# ------------------------------
-# Simple Multi-Face Tracker
-# ------------------------------
+# ============================================================
+# MULTI-FACE TRACKER (Improved)
+# ============================================================
 class MultiFaceTracker:
     def __init__(self, max_lost=10):
         self.next_id = 0
-        self.tracks = {}  # id -> track info
+        self.tracks = {}  # track_id → data
         self.max_lost = max_lost
+
+    def _centroid(self, box):
+        # box = [x1, y1, x2, y2]
+        x1, y1, x2, y2 = box
+        return [(x1 + x2) / 2, (y1 + y2) / 2]
 
     def register(self, box):
         self.tracks[self.next_id] = {
@@ -29,37 +34,37 @@ class MultiFaceTracker:
 
     def update(self, detected_boxes):
         if len(self.tracks) == 0:
-            for box in detected_boxes:
-                self.register(box)
+            for b in detected_boxes:
+                self.register(b)
             return self.tracks
 
         track_ids = list(self.tracks.keys())
         track_boxes = np.array([self.tracks[i]["box"] for i in track_ids])
 
+        # If no detections: increment lost counters
         if len(detected_boxes) == 0:
-            # increment lost counters
             for tid in track_ids:
                 self.tracks[tid]["lost"] += 1
                 if self.tracks[tid]["lost"] > self.max_lost:
                     del self.tracks[tid]
             return self.tracks
 
+        # Convert for distance computation
         detected_boxes_arr = np.array(detected_boxes)
 
-        # compute distance matrix (centroid-based)
-        def centroid(box):
-            t, r, b, l = box
-            return [(l + r) / 2, (t + b) / 2]
+        # Centroids
+        track_centers = np.array([self._centroid(b) for b in track_boxes])
+        detect_centers = np.array([self._centroid(b) for b in detected_boxes_arr])
 
-        track_centers = np.array([centroid(b) for b in track_boxes])
-        detection_centers = np.array([centroid(b) for b in detected_boxes_arr])
+        # Distances
+        distances = cdist(track_centers, detect_centers)
 
-        distances = cdist(track_centers, detection_centers)
-
-        # greedy matching
         used_detects = set()
+
+        # Greedy matching
         for ti, tid in enumerate(track_ids):
             di = distances[ti].argmin()
+
             if di not in used_detects:
                 self.tracks[tid]["box"] = tuple(detected_boxes_arr[di])
                 self.tracks[tid]["lost"] = 0
@@ -67,45 +72,46 @@ class MultiFaceTracker:
             else:
                 self.tracks[tid]["lost"] += 1
 
-        # remove lost tracks
+        # Remove lost tracks
         for tid in track_ids:
             if self.tracks[tid]["lost"] > self.max_lost:
                 del self.tracks[tid]
 
-        # register new detections
-        for di, box in enumerate(detected_boxes):
+        # Register new detections
+        for di, b in enumerate(detected_boxes):
             if di not in used_detects:
-                self.register(box)
+                self.register(b)
 
         return self.tracks
 
 
-# ------------------------------
-# Face Attendance Processor
-# ------------------------------
+# ============================================================
+# VIDEO PROCESSOR
+# ============================================================
 class FaceAttendanceProcessor(VideoProcessorBase):
     def __init__(self):
-        self.students = load_students()
+        self.students = load_students()  # STREAMLIT STORAGE
         self.present = {s["id"]: False for s in self.students}
 
-        self.tracker = MultiFaceTracker()
-        self.face_assignments = {}  # track_id -> student_name
+        self.tracker = MultiFaceTracker(max_lost=15)
+        self.face_assignments = {}  # track_id → student_name
 
     def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
         rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
+        # detect: (embedding, bbox)
         detections = find_faces_in_image(rgb)
-        boxes = [d[1] for d in detections]
+        detected_boxes = [d[1] for d in detections]
 
-        # Track all face boxes
-        tracked = self.tracker.update(boxes)
+        # Track faces
+        tracked = self.tracker.update(detected_boxes)
 
         # Recognize faces
-        for (emb, detected_box) in detections:
-            # find track ID for this face box
-            for tid, track in tracked.items():
-                if track["box"] == detected_box:
+        for emb, box in detections:
+            # match detection to correct track_id
+            for tid, tr in tracked.items():
+                if tr["box"] == tuple(box):
 
                     best_sim = 0
                     best_id = None
@@ -119,41 +125,39 @@ class FaceAttendanceProcessor(VideoProcessorBase):
                                 best_id = s["id"]
                                 best_name = s["name"]
 
-                    # store assignment for consistency across frames
                     self.face_assignments[tid] = best_name
 
                     if best_id:
                         self.present[best_id] = True
 
-        # Draw boxes and labels
-        for tid, track in tracked.items():
-            (top, right, bottom, left) = track["box"]
+        # Draw
+        for tid, tr in tracked.items():
+            x1, y1, x2, y2 = tr["box"]
             name = self.face_assignments.get(tid, "Unknown")
 
             color = (0, 255, 0) if name != "Unknown" else (0, 0, 255)
-
-            cv2.rectangle(img, (left, top), (right, bottom), color, 2)
-            cv2.putText(img, f"{name} (ID:{tid})", (left, top - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+            cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(img, f"{name}",
+                        (x1, y1 - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.8, color, 2)
 
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
 
-# ------------------------------
-# UI Wrapper
-# ------------------------------
+# ============================================================
+# UI WRAPPER
+# ============================================================
 def live_webrtc_attendance_ui():
-    st.subheader("📱 Live Mobile Camera Attendance (Multi-Face Tracking + WebRTC)")
-    st.write("Use mobile browser → allow camera permissions → choose back/front camera.")
+    st.subheader("📱 Live Mobile Camera Attendance (WebRTC + Multi-Face Tracking)")
+    st.write("Open on mobile browser → Allow camera → Use back/front camera.")
 
-    # Camera selector
     cam_choice = st.selectbox(
         "Choose Camera",
         ["Front Camera", "Back Camera"],
-        key="camera_choice"
+        key="camera_select"
     )
 
-    # Apply facingMode
     constraints = {
         "video": {
             "facingMode": "user" if cam_choice == "Front Camera" else "environment"
@@ -164,16 +168,13 @@ def live_webrtc_attendance_ui():
     processor = FaceAttendanceProcessor()
 
     webrtc_streamer(
-        key="live-attendance-webrtc-upgraded",
+        key="webrtc-attendance",
         video_processor_factory=lambda: processor,
         media_stream_constraints=constraints,
-        async_processing=True,
+        async_processing=True
     )
 
-    # Finish button
-    finish = st.button("Finish Attendance")
-
-    if finish:
+    if st.button("Finish Attendance"):
         return processor.present, True
 
     return None, False

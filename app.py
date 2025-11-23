@@ -3,6 +3,7 @@
 # With Signup + Login + Role Routing + Logout + User Display
 # ===========================================================
 
+import os
 import streamlit as st
 import pandas as pd
 from io import BytesIO
@@ -29,6 +30,9 @@ from teacher_portal import teacher_portal
 # Optional logo
 LOGO_PATH = "/mnt/data/c5faf612-92da-468e-9e38-a88bf4e9e287.png"
 
+# Ensure the data/attendance_history exists for consistency with storage.py
+os.makedirs(os.path.join("data", "attendance_history"), exist_ok=True)
+
 # -----------------------------------------------------------
 # INITIALIZE SESSION
 # -----------------------------------------------------------
@@ -38,6 +42,9 @@ if "user" not in st.session_state:
 if "show_signup" not in st.session_state:
     st.session_state.show_signup = False
 
+# prepare signup captures storage
+if "signup_captures" not in st.session_state:
+    st.session_state["signup_captures"] = []
 
 # -----------------------------------------------------------
 # LOGOUT BUTTON + USER DISPLAY
@@ -46,36 +53,39 @@ def top_bar():
     if st.session_state.user:
         col1, col2 = st.columns([6, 1])
         with col1:
-            st.write(f"### 👤 Logged in as: {st.session_state.user['username']} ({st.session_state.user['role']})")
+            st.write(f"### 👤 Logged in as: {st.session_state.user['username']} ({st.session_state.user.get('role','')})")
         with col2:
             if st.button("Logout"):
                 st.session_state.user = None
                 st.session_state.show_signup = False
-                # stop execution to safely return to login UI
-                st.stop()
+                st.stop()   # safe stop to return to login UI
 
-
+# -----------------------------------------------------------
+# SIGNUP UI (multi-image support for students)
+# -----------------------------------------------------------
 def signup_ui():
-    st.header("🆕 Create Account (Students require face photos)")
+    st.header("🆕 Create Account (Students: upload/capture face photos)")
 
-    username = st.text_input("Choose Username", key="signup_username")
-    password = st.text_input("Choose Password", type="password", key="signup_password")
-    role = st.selectbox("Role", ["student", "teacher", "admin"], key="signup_role")
-    programme = st.text_input("Programme (Optional)", key="signup_programme")
-    student_class = st.text_input("Class (Optional)", key="signup_class")
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        username = st.text_input("Choose Username", key="signup_username")
+        password = st.text_input("Choose Password", type="password", key="signup_password")
+        role = st.selectbox("Role", ["student", "teacher", "admin"], key="signup_role")
+        programme = st.text_input("Programme (Optional)", key="signup_programme")
+        student_class = st.text_input("Class (Optional)", key="signup_class")
+    with col2:
+        if LOGO_PATH and st.button("Show Logo", key="signup_show_logo"):
+            st.image(LOGO_PATH, use_column_width=True)
 
-    # -----------------------------------------
+    # -----------------------------
     # MULTI-IMAGE SUPPORT FOR STUDENTS
-    # -----------------------------------------
+    # -----------------------------
     images = []
-
-    if "signup_captures" not in st.session_state:
-        st.session_state["signup_captures"] = []
 
     if role == "student":
         st.write("### 📸 Upload or Capture MULTIPLE Photos")
 
-        # ---------- Upload multiple ----------
+        # Upload multiple files (optional)
         uploads = st.file_uploader(
             "Upload photos",
             type=["jpg", "png"],
@@ -84,35 +94,45 @@ def signup_ui():
         )
         if uploads:
             for f in uploads:
-                images.append(load_image_from_bytes(f.getvalue()))
+                try:
+                    images.append(load_image_from_bytes(f.getvalue()))
+                except:
+                    continue
 
-        # ---------- Unlimited Captures ----------
-        st.write("### OR Capture Photos")
+        # Unlimited capture flow via session_state
+        st.write("### OR Capture Photos (use camera multiple times)")
+        if st.button("Capture New Photo", key="signup_capture_new"):
+            # create a camera_input widget with a unique key so user can take a new photo
+            cap_key = f"signup_cap_{len(st.session_state['signup_captures'])}"
+            cap = st.camera_input("Take Photo", key=cap_key)
+            if cap:
+                st.session_state["signup_captures"].append(cap)
 
-        if st.button("Capture New Photo"):
-            new_cap = st.camera_input("Take Photo")
-            if new_cap:
-                st.session_state["signup_captures"].append(new_cap)
+        # show previews of captured images and add them to images list
+        if st.session_state["signup_captures"]:
+            cols = st.columns(min(4, len(st.session_state["signup_captures"])))
+            for idx, cap in enumerate(st.session_state["signup_captures"]):
+                try:
+                    cols[idx % len(cols)].image(cap, width=150, caption=f"Captured {idx+1}")
+                    images.append(load_image_from_bytes(cap.getvalue()))
+                except:
+                    continue
 
-        # Show all captured:
-        for idx, cap in enumerate(st.session_state["signup_captures"]):
-            st.image(cap, width=150, caption=f"Captured {idx+1}")
-            images.append(load_image_from_bytes(cap.getvalue()))
-
-        # Option to clear captured:
-        if st.button("Clear Captured Photos"):
+        if st.button("Clear Captured Photos", key="signup_clear_caps"):
             st.session_state["signup_captures"] = []
 
-    # -----------------------------------------
+    # -----------------------------
     # CREATE ACCOUNT BUTTON
-    # -----------------------------------------
+    # -----------------------------
     if st.button("Create Account", key="signup_create"):
+        # Basic validation
         if not username or not password:
             st.error("Username and password are required.")
             return
 
+        # If student, must provide at least one image
         if role == "student" and len(images) == 0:
-            st.error("Students must upload or capture at least one photo.")
+            st.error("Students must upload or capture at least one face photo.")
             return
 
         ok, msg = create_user(username, password, role, programme, student_class)
@@ -120,16 +140,19 @@ def signup_ui():
             st.error(msg)
             return
 
-        # -------- Extract embeddings --------
+        # process student images and save embeddings
         if role == "student":
             embeddings = []
             for img in images:
-                emb = get_face_embedding(img)
-                if emb:
-                    embeddings.append(emb)
+                try:
+                    emb = get_face_embedding(img)
+                    if emb:
+                        embeddings.append(emb)
+                except:
+                    continue
 
             if len(embeddings) == 0:
-                st.error("No valid faces detected.")
+                st.error("No valid face detected in any uploaded images.")
                 return
 
             add_student(
@@ -140,12 +163,12 @@ def signup_ui():
                 embeddings=embeddings
             )
 
-            st.success(f"Student registered with {len(embeddings)} samples!")
+            st.success(f"Student registered with {len(embeddings)} face samples!")
 
         else:
             st.success("Account created successfully!")
 
-        # auto login
+        # auto-login
         st.session_state.user = {
             "username": username,
             "role": role,
@@ -153,6 +176,8 @@ def signup_ui():
             "class": student_class
         }
         st.session_state.show_signup = False
+        # clear signup captures to avoid reuse
+        st.session_state["signup_captures"] = []
         return
 
 # -----------------------------------------------------------
@@ -178,7 +203,6 @@ def login_ui():
         st.session_state.show_signup = True
         return
 
-
 # -----------------------------------------------------------
 # SHOW LOGIN OR SIGNUP FIRST
 # -----------------------------------------------------------
@@ -189,7 +213,6 @@ if st.session_state.user is None and st.session_state.show_signup:
 if st.session_state.user is None and not st.session_state.show_signup:
     login_ui()
     st.stop()
-
 
 # -----------------------------------------------------------
 # SAFETY GUARD BEFORE ROLE ROUTING
@@ -203,14 +226,12 @@ top_bar()
 role = st.session_state.user["role"]
 username = st.session_state.user["username"]
 
-
 # -----------------------------------------------------------
 # STUDENT PORTAL
 # -----------------------------------------------------------
 if role == "student":
     student_portal(username)
     st.stop()
-
 
 # -----------------------------------------------------------
 # TEACHER PORTAL
@@ -219,7 +240,6 @@ if role == "teacher":
     teacher_portal(username)
     st.stop()
 
-
 # -----------------------------------------------------------
 # ADMIN PORTAL
 # -----------------------------------------------------------
@@ -227,15 +247,16 @@ mode = st.sidebar.selectbox("Choose Option", [
     "Register Student (Face)",
     "Take Attendance (Image)",
     "Take Attendance From Video",
-    "Live Mobile Camera (WebRTC)",   # <-- NEW
+    "Live Mobile Camera (WebRTC)",
     "Dashboard",
     "Admin Panel"
 ])
+
 # ---------------------------------------------------------
-# REGISTER STUDENT (MULTI-IMAGE SUPPORT)
+# REGISTER STUDENT (ADMIN) — MULTI-IMAGE SUPPORT
 # ---------------------------------------------------------
 if mode == "Register Student (Face)":
-    st.header("Register Student")
+    st.header("Register Student (Admin)")
 
     name = st.text_input("Student Name")
     sid = st.text_input("Student ID")
@@ -252,54 +273,55 @@ if mode == "Register Student (Face)":
     uploads = st.file_uploader(
         "Upload 1 or more student photos",
         type=["jpg", "png"],
-        accept_multiple_files=True
+        accept_multiple_files=True,
+        key="admin_register_uploads"
     )
 
     st.write("### OR Capture Multiple Photos")
-    capture = st.camera_input("Capture Photo")
-    more_caps = st.checkbox("Capture another photo")
+    if "admin_register_caps" not in st.session_state:
+        st.session_state["admin_register_caps"] = []
 
-    captured_images = []
-    if capture:
-        captured_images.append(capture)
+    if st.button("Capture New Photo (Admin)", key="admin_register_capture"):
+        cap_key = f"admin_reg_cap_{len(st.session_state['admin_register_caps'])}"
+        cap = st.camera_input("Capture Photo", key=cap_key)
+        if cap:
+            st.session_state["admin_register_caps"].append(cap)
 
-    if more_caps:
-        capture2 = st.camera_input("Capture Additional Photo")
-        if capture2:
-            captured_images.append(capture2)
+    # collect images
+    images = []
+    # from uploads
+    if uploads:
+        for f in uploads:
+            try:
+                images.append(load_image_from_bytes(f.getvalue()))
+            except:
+                continue
+    # from admin captures
+    for cap in st.session_state["admin_register_caps"]:
+        try:
+            images.append(load_image_from_bytes(cap.getvalue()))
+        except:
+            continue
 
-    if st.button("Register"):
+    if st.button("Register Student (Admin)", key="admin_register_button"):
         if not all([name, sid, programme, student_class]):
             st.error("Please fill all fields.")
         else:
-            images = []
-
-            # Add uploaded images
-            if uploads:
-                for f in uploads:
-                    images.append(load_image_from_bytes(f.getvalue()))
-
-            # Add captured images
-            for cap in captured_images:
-                images.append(load_image_from_bytes(cap.getvalue()))
-
             if len(images) == 0:
                 st.error("Please upload or capture at least one photo.")
             else:
                 embeddings = []
-                valid_faces = 0
-
-                # Extract face embeddings from all images
                 for img in images:
-                    emb = get_face_embedding(img)
-                    if emb:
-                        embeddings.append(emb)
-                        valid_faces += 1
+                    try:
+                        emb = get_face_embedding(img)
+                        if emb:
+                            embeddings.append(emb)
+                    except:
+                        continue
 
-                if valid_faces == 0:
-                    st.error("No clear face detected in any image. Try again.")
+                if len(embeddings) == 0:
+                    st.error("No valid faces detected.")
                 else:
-                    # Save student with ALL embeddings
                     add_student(
                         sid=sid,
                         name=name,
@@ -307,19 +329,15 @@ if mode == "Register Student (Face)":
                         student_class=student_class,
                         embeddings=embeddings
                     )
+                    st.success(f"Registered {name} with {len(embeddings)} samples!")
 
-                    st.success(
-                        f"Successfully registered {name}! "
-                        f"Used {valid_faces} face samples."
-                    )
-
-# ------ ADMIN: IMAGE ATTENDANCE ------
+# ------ ADMIN: IMAGE ATTENDANCE (single-image kept for admin by default) ------
 elif mode == "Take Attendance (Image)":
-    st.header("🖼 Image Attendance")
+    st.header("🖼 Image Attendance (Admin)")
     details = class_subject_time_selector()
 
-    upload = st.file_uploader("Upload Class Photo", type=["jpg","png"])
-    capture = st.camera_input("Or Capture")
+    upload = st.file_uploader("Upload Class Photo", type=["jpg","png"], key="admin_single_image")
+    capture = st.camera_input("Or Capture", key="admin_single_capture")
 
     if upload or capture:
         img = load_image_from_bytes((capture or upload).getvalue())
@@ -333,24 +351,27 @@ elif mode == "Take Attendance (Image)":
             boxes.append(box)
             best_sim = 0
             best_name = "Unknown"
+            best_id = None
             for s in students:
                 for st_emb in s["embeddings"]:
                     sim = cosine_similarity(emb, st_emb)
                     if sim > 0.55 and sim > best_sim:
                         best_sim = sim
                         best_name = s["name"]
-                        present[s["id"]] = True
+                        best_id = s["id"]
             labels.append(best_name)
+            if best_id:
+                present[best_id] = True
 
         st.image(draw_boxes(img, boxes, labels), use_column_width=True)
 
         final_df = manual_attendance_ui(students, present)
-        final_df["Class"] = details["class"]
-        final_df["Programme"] = [s.get("programme","") for s in students]
-        final_df["Subject"] = details["subject"]
-        final_df["Time"] = details["time"]
+        final_df["Class"] = details.get("class", "")
+        final_df["Programme"] = [s.get("programme", "") for s in students]
+        final_df["Subject"] = details.get("subject", "")
+        final_df["Time"] = details.get("time", "")
 
-        admin_panel_ui(final_df, details["class"], details["subject"])
+        admin_panel_ui(final_df, details.get("class", ""), details.get("subject", ""))
 
 # ------ ADMIN: VIDEO ATTENDANCE ------
 elif mode == "Take Attendance From Video":
@@ -360,19 +381,14 @@ elif mode == "Take Attendance From Video":
 
     if processed:
         students = load_students()
-        final_df = pd.DataFrame([
-            {
-                "Student ID": s["id"],
-                "Name": s["name"],
-                "Class": s.get("student_class",""),
-                "Programme": s.get("programme",""),
-                "Present": present[s["id"]],
-            }
-            for s in students
-        ])
         final_df = manual_attendance_ui(students, present)
 
-        admin_panel_ui(final_df, details["class"], details["subject"])
+        final_df["Class"] = details.get("class", "")
+        final_df["Subject"] = details.get("subject", "")
+        final_df["Time"] = details.get("time", "")
+
+        admin_panel_ui(final_df, details.get("class", ""), details.get("subject", ""))
+
 # ---------------------------------------------------------
 # LIVE MOBILE CAMERA ATTENDANCE (WebRTC)
 # ---------------------------------------------------------
@@ -387,23 +403,13 @@ elif mode == "Live Mobile Camera (WebRTC)":
 
     if processed:
         students = load_students()
-
-        final_df = pd.DataFrame([
-            {
-                "Student ID": s["id"],
-                "Name": s["name"],
-                "Class": s.get("student_class", ""),
-                "Programme": s.get("programme", ""),
-                "Present": present[s["id"]],
-            }
-            for s in students
-        ])
-
-        # Manual correction UI
         final_df = manual_attendance_ui(students, present)
 
-        # Save to admin history
-        admin_panel_ui(final_df, details["class"], details["subject"])
+        final_df["Class"] = details.get("class", "")
+        final_df["Subject"] = details.get("subject", "")
+        final_df["Time"] = details.get("time", "")
+
+        admin_panel_ui(final_df, details.get("class", ""), details.get("subject", ""))
 
 # ------ ADMIN: DASHBOARD ------
 elif mode == "Dashboard":

@@ -51,8 +51,10 @@ def top_bar():
             if st.button("Logout"):
                 st.session_state.user = None
                 st.session_state.show_signup = False
-                # NO experimental_rerun here
-                st.stop()   # stop execution → Streamlit safely reruns
+                # stop execution to safely return to login UI
+                st.stop()
+
+
 # -----------------------------------------------------------
 # SIGNUP UI (Plan B: Students upload or capture a photo)
 # -----------------------------------------------------------
@@ -93,7 +95,7 @@ def signup_ui():
             st.error(msg)
             return
 
-        # For students → register face
+        # For students → register face (store as list of embeddings)
         if role == "student":
             try:
                 img = load_image_from_bytes(photo.getvalue())
@@ -106,12 +108,13 @@ def signup_ui():
                 st.error("No face detected—use a clear frontal photo.")
                 return
 
+            # add_student expects embeddings; pass as list
             add_student(
                 sid=username,
                 name=username,
                 programme=programme,
                 student_class=student_class,
-                embedding=emb
+                embeddings=[emb]
             )
 
             st.success("Student account + Face registration completed!")
@@ -210,7 +213,7 @@ mode = st.sidebar.selectbox("Choose Option", [
 # ---------------------------------------------------------
 # REGISTER STUDENT (MULTI-IMAGE SUPPORT)
 # ---------------------------------------------------------
-if mode == "Register Student":
+if mode == "Register Student (Face)":
     st.header("Register Student")
 
     name = st.text_input("Student Name")
@@ -281,7 +284,7 @@ if mode == "Register Student":
                         name=name,
                         programme=programme,
                         student_class=student_class,
-                        embedding=embeddings
+                        embeddings=embeddings
                     )
 
                     st.success(
@@ -340,7 +343,7 @@ elif mode == "Take Attendance From Video":
             {
                 "Student ID": s["id"],
                 "Name": s["name"],
-                "Class": s.get("class",""),
+                "Class": s.get("student_class",""),
                 "Programme": s.get("programme",""),
                 "Present": present[s["id"]],
             }
@@ -368,7 +371,7 @@ elif mode == "Live Mobile Camera (WebRTC)":
             {
                 "Student ID": s["id"],
                 "Name": s["name"],
-                "Class": s.get("class", ""),
+                "Class": s.get("student_class", ""),
                 "Programme": s.get("programme", ""),
                 "Present": present[s["id"]],
             }

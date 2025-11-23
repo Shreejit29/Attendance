@@ -199,13 +199,13 @@ if role == "teacher":
 # -----------------------------------------------------------
 # ADMIN PORTAL
 # -----------------------------------------------------------
-st.sidebar.title("Admin Menu")
 mode = st.sidebar.selectbox("Choose Option", [
     "Register Student (Face)",
     "Take Attendance (Image)",
     "Take Attendance From Video",
+    "Live Mobile Camera (WebRTC)",   # <-- NEW
     "Dashboard",
-    "Admin Panel",
+    "Admin Panel"
 ])
 
 # ------ ADMIN: REGISTER STUDENT (FACE) ------
@@ -292,6 +292,37 @@ elif mode == "Take Attendance From Video":
         ])
         final_df = manual_attendance_ui(students, present)
 
+        admin_panel_ui(final_df, details["class"], details["subject"])
+# ---------------------------------------------------------
+# LIVE MOBILE CAMERA ATTENDANCE (WebRTC)
+# ---------------------------------------------------------
+elif mode == "Live Mobile Camera (WebRTC)":
+    st.header("📱 Live Mobile Camera Attendance (WebRTC)")
+
+    from live_webrtc_attendance import live_webrtc_attendance_ui
+
+    details = class_subject_time_selector()
+
+    present, processed = live_webrtc_attendance_ui()
+
+    if processed:
+        students = load_students()
+
+        final_df = pd.DataFrame([
+            {
+                "Student ID": s["id"],
+                "Name": s["name"],
+                "Class": s.get("class", ""),
+                "Programme": s.get("programme", ""),
+                "Present": present[s["id"]],
+            }
+            for s in students
+        ])
+
+        # Manual correction UI
+        final_df = manual_attendance_ui(students, present)
+
+        # Save to admin history
         admin_panel_ui(final_df, details["class"], details["subject"])
 
 # ------ ADMIN: DASHBOARD ------

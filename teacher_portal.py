@@ -25,21 +25,23 @@ def teacher_portal(username):
 
     # Updated menu WITH WebRTC feature
     choice = st.selectbox("Select Task", [
-        "Take Attendance (Image)",
+        "Take Attendance (Image)",     # Multi-shot attendance
         "Take Attendance (Video)",
         "Live Mobile Camera (WebRTC)",
         "Manage Students"
     ])
 
-    # ---------------------------------------
-    # TAKE ATTENDANCE (IMAGE) — WITH MULTI-IMAGE SUPPORT
-    # ---------------------------------------
+    # ============================================
+    # MULTI-IMAGE ATTENDANCE (FINAL VERSION)
+    # ============================================
     if choice == "Take Attendance (Image)":
 
         st.subheader("📸 Multi-Image Attendance Capture")
 
+        # Step 1: Choose class, subject, time
         details = class_subject_time_selector()
 
+        # Step 2: Upload / Capture multiple images
         uploads = st.file_uploader(
             "Upload one or more class photos",
             type=["jpg", "png"],
@@ -48,19 +50,19 @@ def teacher_portal(username):
 
         capture_more = st.camera_input("Or capture a photo")
 
-        # ----- COMBINE ALL IMAGES -----
+        # Step 3: Combine all images
         images = []
 
-        # Add uploaded images
         if uploads:
             for file in uploads:
-                images.append(load_image_from_bytes(file.getvalue()))
+                img = load_image_from_bytes(file.getvalue())
+                images.append(img)
 
-        # Add camera photo
         if capture_more:
-            images.append(load_image_from_bytes(capture_more.getvalue()))
+            img = load_image_from_bytes(capture_more.getvalue())
+            images.append(img)
 
-        # If user uploaded/captured any images
+        # If at least one image provided
         if len(images) > 0:
             st.info(f"Processing {len(images)} class photos… Please wait.")
 
@@ -69,6 +71,7 @@ def teacher_portal(username):
 
             processed_count = 0
 
+            # Step 4: Process each image
             for img in images:
                 processed_count += 1
                 st.write(f"### 🖼 Processing Image {processed_count}/{len(images)}")
@@ -88,7 +91,7 @@ def teacher_portal(username):
                         for st_emb in s["embeddings"]:
                             sim = cosine_similarity(emb, st_emb)
 
-                            # threshold
+                            # threshold for similarity
                             if sim > 0.55 and sim > best_sim:
                                 best_sim = sim
                                 best_name = s["name"]
@@ -96,27 +99,27 @@ def teacher_portal(username):
 
                     labels.append(best_name)
 
-                    # Mark present only ONCE
+                    # Mark present only once
                     if best_id:
                         present[best_id] = True
 
-                # Display processed image
+                # Show annotated preview
                 out_img = draw_boxes(img, boxes, labels)
                 st.image(out_img, use_column_width=True)
 
             st.success(f"Processed {len(images)} photos successfully!")
 
-            # ------- Manual Confirmation UI -------
+            # Step 5: Manual correction UI
             final_df = manual_attendance_ui(students, present)
 
-            # Add metadata
+            # Step 6: Add metadata
             final_df["Class"] = details["class"]
             final_df["Subject"] = details["subject"]
             final_df["Time"] = details["time"]
 
             st.dataframe(final_df)
 
-            # ------- Download Excel -------
+            # Step 7: Download Excel
             if st.button("Download Excel"):
                 buf = BytesIO()
                 final_df.to_excel(buf, index=False)
@@ -127,9 +130,9 @@ def teacher_portal(username):
                     file_name="teacher_multi_image_attendance.xlsx"
                 )
 
-    # ---------------------------------------
-    # TAKE ATTENDANCE (VIDEO)
-    # ---------------------------------------
+    # ============================================
+    # VIDEO ATTENDANCE
+    # ============================================
     if choice == "Take Attendance (Video)":
         st.subheader("🎥 Take Attendance From Uploaded Video")
 
@@ -148,9 +151,9 @@ def teacher_portal(username):
 
             st.dataframe(final_df)
 
-    # ---------------------------------------
-    # LIVE MOBILE CAMERA (WebRTC) — NEW FEATURE
-    # ---------------------------------------
+    # ============================================
+    # LIVE WebRTC Mobile Camera Attendance
+    # ============================================
     if choice == "Live Mobile Camera (WebRTC)":
         st.subheader("📱 Live Mobile Camera Attendance (WebRTC + Multi-Face Tracking)")
 
@@ -179,16 +182,16 @@ def teacher_portal(username):
                     file_name="teacher_live_webrtc_attendance.xlsx"
                 )
 
-    # ---------------------------------------
+    # ============================================
     # MANAGE STUDENTS
-    # ---------------------------------------
+    # ============================================
     if choice == "Manage Students":
         st.subheader("Manage Students")
 
         students = load_students()
         df = pd.DataFrame(students)
 
-        st.dataframe(df[["id", "name", "programme", "class"]])
+        st.dataframe(df[["id", "name", "programme", "student_class"]])
 
         sid = st.selectbox("Select Student to Delete", df["id"])
 

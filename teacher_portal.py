@@ -1,4 +1,6 @@
-# teacher_portal.py
+# ============================================================
+# teacher_portal.py — Streamlit Storage API Version (FINAL)
+# ============================================================
 
 import streamlit as st
 import pandas as pd
@@ -27,20 +29,19 @@ def teacher_portal(username):
         "Manage Students"
     ])
 
-    # ============================================
-    # MULTI-IMAGE ATTENDANCE — FINAL VERSION
-    # ============================================
+    # ======================================================
+    # 1️⃣ MULTI-IMAGE TEACHER ATTENDANCE
+    # ======================================================
     if choice == "Take Attendance (Image)":
 
         st.subheader("📸 Multi-Image Attendance (Teacher)")
-
         details = class_subject_time_selector()
 
-        # Session storage for captured images
+        # Storage for captures
         if "teacher_captures" not in st.session_state:
             st.session_state["teacher_captures"] = []
 
-        # ---- Multiple Uploads ----
+        # Multiple uploads
         uploads = st.file_uploader(
             "Upload one or more class photos",
             type=["jpg", "png"],
@@ -48,46 +49,47 @@ def teacher_portal(username):
             key="teacher_multi_upload"
         )
 
-        # ---- Repeated Camera Capture ----
-        if st.button("📸 Capture New Photo", key="teacher_capture_button"):
-            cap = st.camera_input(
-                "Take Photo",
-                key=f"teacher_cap_{len(st.session_state['teacher_captures'])}"
-            )
+        # Multi-camera capture
+        if st.button("📸 Capture New Photo", key="teacher_capture_new"):
+            cap = st.camera_input("Take Photo", 
+                                  key=f"teacher_cap_{len(st.session_state['teacher_captures'])}")
             if cap:
                 st.session_state["teacher_captures"].append(cap)
 
         images = []
 
-        # uploaded images
+        # Process uploaded images
         if uploads:
             for f in uploads:
                 images.append(load_image_from_bytes(f.getvalue()))
 
-        # captured images
-        for idx, cap in enumerate(st.session_state["teacher_captures"]):
-            st.image(cap, width=150, caption=f"Captured {idx+1}")
-            images.append(load_image_from_bytes(cap.getvalue()))
+        # Show & add captured images
+        if st.session_state["teacher_captures"]:
+            cols = st.columns(4)
+            for idx, cap in enumerate(st.session_state["teacher_captures"]):
+                cols[idx % 4].image(cap, width=150)
+                images.append(load_image_from_bytes(cap.getvalue()))
 
         if len(images) == 0:
             st.info("Upload or capture at least one image.")
-            st.stop()
+            return
 
-        # ---- Process Images ----
-        if st.button("Process Attendance", key="teacher_process_button"):
+        # Process Attendance
+        if st.button("Process Attendance", key="teacher_process"):
 
             students = load_students()
             present = {s["id"]: False for s in students}
 
-            st.write(f"### Processing {len(images)} images...")
+            st.write(f"### Processing {len(images)} images...\n")
 
+            # Loop through images
             for i, img in enumerate(images, start=1):
                 st.write(f"#### Image {i}/{len(images)}")
 
                 detections = find_faces_in_image(img)
-
                 boxes, labels = [], []
 
+                # Face recognition
                 for emb, box in detections:
                     boxes.append(box)
 
@@ -108,10 +110,10 @@ def teacher_portal(username):
                     if best_id:
                         present[best_id] = True
 
-                annotated = draw_boxes(img, boxes, labels)
-                st.image(annotated, use_column_width=True)
+                result_img = draw_boxes(img, boxes, labels)
+                st.image(result_img, use_column_width=True)
 
-            # ---- Manual correction ----
+            # Manual correction
             final_df = manual_attendance_ui(students, present)
 
             # metadata
@@ -121,30 +123,32 @@ def teacher_portal(username):
 
             st.dataframe(final_df)
 
-            if st.button("Download Excel", key="teacher_download_button"):
+            # Optional Excel download
+            if st.button("Download Excel", key="teacher_download"):
                 buf = BytesIO()
                 final_df.to_excel(buf, index=False)
                 buf.seek(0)
-                st.download_button(
-                    "Download Attendance",
-                    data=buf,
-                    file_name="teacher_multi_image_attendance.xlsx"
-                )
+                st.download_button("Download Attendance File", buf, 
+                                   file_name="teacher_attendance.xlsx")
 
-    # ============================================
-    # VIDEO ATTENDANCE
-    # ============================================
+            # Permanent save (Teacher version)
+            if st.button("Save Attendance Permanently", key="teacher_save_storage"):
+                key = f"attendance/{details['class']}_{details['subject']}_{details['time']}"
+                st.storage.write(key, final_df.to_dict(orient="records"))
+                st.success(f"Saved to permanent storage: {key}")
+
+    # ======================================================
+    # 2️⃣ VIDEO ATTENDANCE
+    # ======================================================
     if choice == "Take Attendance (Video)":
 
         st.subheader("🎥 Video Attendance")
 
         details = class_subject_time_selector()
-
         present, processed = video_attendance_ui()
 
         if processed:
             students = load_students()
-
             final_df = manual_attendance_ui(students, present)
 
             final_df["Class"] = details["class"]
@@ -153,20 +157,24 @@ def teacher_portal(username):
 
             st.dataframe(final_df)
 
-    # ============================================
-    # LIVE WEBRTC MOBILE CAMERA
-    # ============================================
+            # Permanent save
+            if st.button("Save Video Attendance"):
+                key = f"attendance/{details['class']}_{details['subject']}_{details['time']}"
+                st.storage.write(key, final_df.to_dict(orient="records"))
+                st.success(f"Saved under: {key}")
+
+    # ======================================================
+    # 3️⃣ LIVE WEBRTC MOBILE CAMERA
+    # ======================================================
     if choice == "Live Mobile Camera (WebRTC)":
 
-        st.subheader("📱 Live Mobile Camera Attendance (WebRTC)")
+        st.subheader("📱 Live Mobile Camera Attendance")
 
         details = class_subject_time_selector()
-
         present, processed = live_webrtc_attendance_ui()
 
         if processed:
             students = load_students()
-
             final_df = manual_attendance_ui(students, present)
 
             final_df["Class"] = details["class"]
@@ -175,32 +183,26 @@ def teacher_portal(username):
 
             st.dataframe(final_df)
 
-            if st.button("Download Excel"):
-                buf = BytesIO()
-                final_df.to_excel(buf, index=False)
-                buf.seek(0)
-                st.download_button(
-                    "Download Attendance",
-                    data=buf,
-                    file_name="teacher_live_webrtc_attendance.xlsx"
-                )
+            if st.button("Save Live Attendance"):
+                key = f"attendance/{details['class']}_{details['subject']}_{details['time']}"
+                st.storage.write(key, final_df.to_dict(orient="records"))
+                st.success(f"Stored at: {key}")
 
-    # ============================================
-    # MANAGE STUDENTS
-    # ============================================
+    # ======================================================
+    # 4️⃣ MANAGE STUDENTS
+    # ======================================================
     if choice == "Manage Students":
 
-        st.subheader("Manage Students")
+        st.subheader("🧑‍🎓 Manage Students")
 
         students = load_students()
         df = pd.DataFrame(students)
 
-        # FIX: correct column name for class: "class" NOT "student_class"
         st.dataframe(df[["id", "name", "programme", "class"]])
 
         sid = st.selectbox("Select Student to Delete", df["id"])
 
         if st.button("Delete Student"):
             delete_student_by_id(sid)
-            st.success("Student Deleted Successfully!")
+            st.success("Student removed.")
             st.experimental_rerun()

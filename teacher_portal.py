@@ -31,57 +31,103 @@ def teacher_portal(username):
         "Live Mobile Camera (WebRTC)",   # ← NEW
         "Manage Students"
     ])
+# ---------------------------------------------------------
+# MULTI-IMAGE ATTENDANCE (UPDATED & IMPROVED VERSION)
+# ---------------------------------------------------------
 
-    # ---------------------------------------
-    # IMAGE ATTENDANCE
-    # ---------------------------------------
-    if choice == "Take Attendance (Image)":
-        st.subheader("Take Attendance Using Image")
+st.subheader("📸 Multi-Image Attendance Capture")
 
-        details = class_subject_time_selector()
+uploads = st.file_uploader(
+    "Upload one or more class photos",
+    type=["jpg", "png"],
+    accept_multiple_files=True
+)
 
-        upload = st.file_uploader("Upload class photo", type=["jpg","png"])
-        capture = st.camera_input("Or capture")
+capture_more = st.camera_input("Or capture a photo")
 
-        if upload or capture:
-            img = load_image_from_bytes((upload or capture).getvalue())
-            detections = find_faces_in_image(img)
+# ----- COMBINE ALL IMAGES -----
+images = []
 
-            students = load_students()
-            present = {s["id"]: False for s in students}
+# Add uploaded images
+if uploads:
+    for file in uploads:
+        images.append(load_image_from_bytes(file.getvalue()))
 
-            boxes, labels = [], []
+# Add camera photo
+if capture_more:
+    images.append(load_image_from_bytes(capture_more.getvalue()))
 
-            for emb, box in detections:
-                boxes.append(box)
-                best_sim, best_name = 0, "Unknown"
+if len(images) > 0:
 
-                for s in students:
-                    for st_emb in s["embeddings"]:
-                        sim = cosine_similarity(emb, st_emb)
-                        if sim > 0.55 and sim > best_sim:
-                            best_sim = sim
-                            best_name = s["name"]
-                            present[s["id"]] = True
+    st.info(f"Processing {len(images)} class photos… Please wait.")
 
-                labels.append(best_name)
+    students = load_students()
+    present = {s["id"]: False for s in students}
 
-            out_img = draw_boxes(img, boxes, labels)
-            st.image(out_img, use_column_width=True)
+    processed_count = 0
 
-            final_df = manual_attendance_ui(students, present)
-            final_df["Class"] = details["class"]
-            final_df["Subject"] = details["subject"]
-            final_df["Time"] = details["time"]
+    for img in images:
+        processed_count += 1
+        st.write(f"### 🖼 Processing Image {processed_count}/{len(images)}")
 
-            st.dataframe(final_df)
+        detections = find_faces_in_image(img)
 
-            if st.button("Download Excel"):
-                buf = BytesIO()
-                final_df.to_excel(buf, index=False)
-                buf.seek(0)
-                st.download_button("Download File", data=buf,
-                                   file_name="teacher_image_attendance.xlsx")
+        boxes, labels = [], []
+
+        for emb, box in detections:
+            boxes.append(box)
+
+            best_sim = 0
+            best_name = "Unknown"
+            best_id = None
+
+            for s in students:
+                for st_emb in s["embeddings"]:
+                    sim = cosine_similarity(emb, st_emb)
+
+                    # threshold
+                    if sim > 0.55 and sim > best_sim:
+                        best_sim = sim
+                        best_name = s["name"]
+                        best_id = s["id"]
+
+            labels.append(best_name)
+
+            # Mark present only ONCE
+            if best_id:
+                present[best_id] = True
+
+        # Display processed image
+        out_img = draw_boxes(img, boxes, labels)
+        st.image(out_img, use_column_width=True)
+
+    # ---------------------------------------------------------
+    # Manual Confirmation UI
+    # ---------------------------------------------------------
+    st.success(f"Processed {len(images)} photos successfully!")
+
+    final_df = manual_attendance_ui(students, present)
+
+    # Add metadata
+    final_df["Class"] = details["class"]
+    final_df["Subject"] = details["subject"]
+    final_df["Time"] = details["time"]
+
+    st.dataframe(final_df)
+
+    # ---------------------------------------------------------
+    # Download Excel Option
+    # ---------------------------------------------------------
+    if st.button("Download Excel"):
+        buf = BytesIO()
+        final_df.to_excel(buf, index=False)
+        buf.seek(0)
+        st.download_button(
+            "Download File",
+            data=buf,
+            file_name="teacher_multi_image_attendance.xlsx"
+        )
+
 
     # ---------------------------------------
     # VIDEO ATTENDANCE

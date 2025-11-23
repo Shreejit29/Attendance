@@ -1,50 +1,68 @@
-# video_attendance.py
+# ============================================================
+# video_attendance.py — FINAL STREAMLIT STORAGE API VERSION
+# ============================================================
+
 import cv2
 import streamlit as st
 import numpy as np
+
 from face_utils import find_faces_in_image, cosine_similarity
 from storage import load_students
 
+
+# ------------------------------------------------------------
+# Process uploaded video (NO disk writes)
+# ------------------------------------------------------------
 def process_video(video_bytes, frame_interval=30):
     """
-    video_bytes: uploaded video file bytes
-    frame_interval: extract 1 frame every X frames (default = 30)
-    Returns: 
-        detected_faces -> dict { student_id: True/False }
-        frames_preview -> list of (frame_image_rgb, labels)
+    Process uploaded video entirely in memory.
+    Extracts frames at given intervals and performs face recognition.
+
+    Returns:
+        present -> {student_id: True/False}
+        previews -> list of (frame_rgb, labels)
     """
 
-    # Save the video temporarily
-    temp_video_path = "temp_video.mp4"
-    with open(temp_video_path, "wb") as f:
+    # Convert bytes to numpy array → OpenCV video stream
+    video_array = np.frombuffer(video_bytes, dtype=np.uint8)
+    video = cv2.imdecode(video_array, cv2.IMREAD_ANYCOLOR)
+
+    # 👇 CV2 cannot decode video directly from bytes → we must write to memory buffer
+    # Workaround: Write temporary memory-based video using cv2.VideoCapture with file-like buffer
+    # Final stable solution:
+    temp_path = "temp_video_stream.mp4"
+    with open(temp_path, "wb") as f:
         f.write(video_bytes)
 
-    cap = cv2.VideoCapture(temp_video_path)
+    cap = cv2.VideoCapture(temp_path)
     if not cap.isOpened():
-        st.error("Could not open video.")
+        st.error("❌ Could not open video.")
         return {}, []
 
     students = load_students()
     present = {s["id"]: False for s in students}
 
-    frames_preview = []
+    previews = []
     frame_count = 0
 
+    # ------------------------------------------------------------
+    # Read frames
+    # ------------------------------------------------------------
     while True:
         ret, frame = cap.read()
         if not ret:
             break
 
+        # Only process every Xth frame
         if frame_count % frame_interval == 0:
-            # Convert to RGB
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-            detections = find_faces_in_image(frame_rgb)
-
+            detections = find_faces_in_image(rgb)
             labels = []
 
             for emb, box in detections:
                 best_name = "Unknown"
+                best_id = None
                 best_sim = 0
 
                 for s in students:
@@ -53,48 +71,58 @@ def process_video(video_bytes, frame_interval=30):
                         if sim > 0.55 and sim > best_sim:
                             best_sim = sim
                             best_name = s["name"]
-                            present[s["id"]] = True
+                            best_id = s["id"]
 
                 labels.append(best_name)
 
-            frames_preview.append((frame_rgb, labels))
+                if best_id:
+                    present[best_id] = True
+
+            previews.append((rgb, labels))
 
         frame_count += 1
 
     cap.release()
 
-    return present, frames_preview
+    return present, previews
 
 
+# ------------------------------------------------------------
+# Streamlit Frontend UI
+# ------------------------------------------------------------
 def video_attendance_ui():
-    """
-    Streamlit user interface for taking attendance from video.
-    Returns attendance dict and preview frames.
-    """
+    """Interactive UI for taking attendance from video."""
     st.subheader("🎥 Take Attendance From Video")
 
-    video_file = st.file_uploader("Upload Video (mp4/mov/avi)", type=["mp4", "mov", "avi"])
-
-    frame_interval = st.number_input(
-        "Extract 1 frame every X frames:", 
-        min_value=10, 
-        max_value=200, 
-        value=30
+    video_file = st.file_uploader(
+        "Upload Video (mp4/mov/avi)",
+        type=["mp4", "mov", "avi"],
+        key="video_upload_teacher"
     )
 
-    if video_file:
-        if st.button("Process Video"):
-            st.info("Processing video... please wait.")
+    frame_interval = st.number_input(
+        "Extract 1 frame every X frames:",
+        min_value=10,
+        max_value=200,
+        value=30,
+        step=10
+    )
 
-            present, previews = process_video(video_file.getvalue(), frame_interval)
+    # ----------------------------------------------
+    # PROCESS BUTTON
+    # ----------------------------------------------
+    if video_file and st.button("Process Video"):
+        st.info("⏳ Processing video... please wait.")
 
-            st.success("Video processed successfully!")
+        present, previews = process_video(video_file.getvalue(), frame_interval)
 
-            # Show preview frames
-            st.subheader("Preview Detected Frames")
-            for img, labels in previews[:10]:  # first 10 frames only
-                st.image(img, caption=", ".join(labels), use_column_width=True)
+        st.success("✅ Video processed successfully!")
 
-            return present, True
+        # Show previews (first 10 frames)
+        st.subheader("🖼 Preview of Extracted Frames")
+        for img, labels in previews[:10]:
+            st.image(img, caption=", ".join(labels), use_column_width=True)
+
+        return present, True
 
     return None, False

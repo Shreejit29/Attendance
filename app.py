@@ -233,15 +233,14 @@ if mode == "Register Student":
 
     st.write("### OR Capture Multiple Photos")
     capture = st.camera_input("Capture Photo")
-    more_caps = st.checkbox("Add another capture")
+    more_caps = st.checkbox("Capture another photo")
 
     captured_images = []
     if capture:
         captured_images.append(capture)
 
-    # Allow second capture
     if more_caps:
-        capture2 = st.camera_input("Capture Another Photo")
+        capture2 = st.camera_input("Capture Additional Photo")
         if capture2:
             captured_images.append(capture2)
 
@@ -253,8 +252,8 @@ if mode == "Register Student":
 
             # Add uploaded images
             if uploads:
-                for file in uploads:
-                    images.append(load_image_from_bytes(file.getvalue()))
+                for f in uploads:
+                    images.append(load_image_from_bytes(f.getvalue()))
 
             # Add captured images
             for cap in captured_images:
@@ -266,6 +265,7 @@ if mode == "Register Student":
                 embeddings = []
                 valid_faces = 0
 
+                # Extract face embeddings from all images
                 for img in images:
                     emb = get_face_embedding(img)
                     if emb:
@@ -273,19 +273,21 @@ if mode == "Register Student":
                         valid_faces += 1
 
                 if valid_faces == 0:
-                    st.error("No valid faces detected in any image. Try again.")
-                    return
+                    st.error("No clear face detected in any image. Try again.")
+                else:
+                    # Save student with ALL embeddings
+                    add_student(
+                        sid=sid,
+                        name=name,
+                        programme=programme,
+                        student_class=student_class,
+                        embedding=embeddings
+                    )
 
-                add_student(
-                    sid=sid,
-                    name=name,
-                    programme=programme,
-                    student_class=student_class,
-                    embedding=embeddings   # store ALL embeddings
-                )
-
-                st.success(f"Successfully registered {name} with {valid_faces} face samples.")
-
+                    st.success(
+                        f"Successfully registered {name}! "
+                        f"Used {valid_faces} face samples."
+                    )
 
 # ------ ADMIN: IMAGE ATTENDANCE ------
 elif mode == "Take Attendance (Image)":

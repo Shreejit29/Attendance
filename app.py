@@ -1,9 +1,10 @@
 # ===========================================================
 # Smart Attendance System - FINAL CLEAN VERSION (Plan B)
+# Using Streamlit Storage API for permanent data
 # With Signup + Login + Role Routing + Logout + User Display
-# Added: Security Level (low/medium/high) with password rules and login-attempt limits.
 # ===========================================================
 
+import os
 import streamlit as st
 import pandas as pd
 from io import BytesIO
@@ -43,29 +44,12 @@ if "show_signup" not in st.session_state:
 if "signup_captures" not in st.session_state:
     st.session_state["signup_captures"] = []
 
-# prepare temporary teacher capture storage
-if "teacher_captures" not in st.session_state:
-    st.session_state["teacher_captures"] = []
-
 # prepare admin register captures
 if "admin_register_caps" not in st.session_state:
     st.session_state["admin_register_caps"] = []
 
 # -----------------------------------------------------------
-# Helper: Security configuration (stored permanently)
-# -----------------------------------------------------------
-def get_security_level():
-    lvl = st.storage.read("security_level")
-    return lvl if lvl in ("low", "medium", "high") else "low"
-
-def set_security_level(level):
-    st.storage.write("security_level", level)
-
-def max_login_attempts_for_level(level):
-    return {"low": 10, "medium": 5, "high": 3}.get(level, 10)
-
-# -----------------------------------------------------------
-# Logout / Top bar
+# LOGOUT BUTTON + USER DISPLAY
 # -----------------------------------------------------------
 def top_bar():
     if st.session_state.user:
@@ -76,10 +60,10 @@ def top_bar():
             if st.button("Logout"):
                 st.session_state.user = None
                 st.session_state.show_signup = False
-                st.stop()
+                st.stop()   # safe stop to return to login UI
 
 # -----------------------------------------------------------
-# SIGNUP UI (multi-image support for students + password policy)
+# SIGNUP UI (multi-image support for students)
 # -----------------------------------------------------------
 def signup_ui():
     st.header("🆕 Create Account (Students: upload/capture face photos)")
@@ -94,10 +78,6 @@ def signup_ui():
     with col2:
         if LOGO_PATH and st.button("Show Logo", key="signup_show_logo"):
             st.image(LOGO_PATH, use_column_width=True)
-
-    # show current security level info
-    sec_level = get_security_level()
-    st.info(f"Security level: **{sec_level}** — affects password rules and login limits.")
 
     # -----------------------------
     # MULTI-IMAGE SUPPORT FOR STUDENTS
@@ -151,21 +131,6 @@ def signup_ui():
             st.error("Username and password are required.")
             return
 
-        # Enforce password policy according to security level
-        level = get_security_level()
-        if level == "high":
-            if len(password) < 10 or not any(c.isupper() for c in password) or not any(c.isdigit() for c in password):
-                st.error("High security requires: min length 10, at least one uppercase letter, and one digit.")
-                return
-        elif level == "medium":
-            if len(password) < 8:
-                st.error("Medium security requires password of at least 8 characters.")
-                return
-        else:  # low
-            if len(password) < 6:
-                st.error("Low security requires password of at least 6 characters.")
-                return
-
         # If student, must provide at least one image
         if role == "student" and len(images) == 0:
             st.error("Students must upload or capture at least one face photo.")
@@ -217,7 +182,7 @@ def signup_ui():
         return
 
 # -----------------------------------------------------------
-# LOGIN UI (with login-attempt limits based on security level)
+# LOGIN UI
 # -----------------------------------------------------------
 def login_ui():
     st.subheader("🔐 Login")
@@ -225,37 +190,14 @@ def login_ui():
     username = st.text_input("Username", key="login_username")
     password = st.text_input("Password", type="password", key="login_password")
 
-    # read security level and attempt counts
-    sec_level = get_security_level()
-    max_attempts = max_login_attempts_for_level(sec_level)
-
-    # load attempt dict from storage (persistent)
-    attempts = st.storage.read("login_attempts") or {}
-
-    # check lockout
-    user_attempts = attempts.get(username, 0)
-    if user_attempts >= max_attempts:
-        st.error(f"Account locked due to {user_attempts} failed attempts (security level: {sec_level}). Contact admin.")
-        return
-
     if st.button("Login", key="login_button"):
         user = login_user(username, password)
         if user:
-            # reset attempts
-            attempts[username] = 0
-            st.storage.write("login_attempts", attempts)
             st.session_state.user = user
             st.success(f"Welcome {user['username']}!")
             return
         else:
-            # increment attempts and persist
-            attempts[username] = attempts.get(username, 0) + 1
-            st.storage.write("login_attempts", attempts)
-            remaining = max_attempts - attempts[username]
-            if remaining <= 0:
-                st.error("Invalid credentials. Account locked due to repeated failures.")
-            else:
-                st.error(f"Invalid username or password. Attempts left: {remaining}")
+            st.error("Invalid username or password.")
 
     st.markdown("---")
     if st.button("Create New Account", key="goto_signup"):
@@ -284,20 +226,6 @@ top_bar()
 
 role = st.session_state.user["role"]
 username = st.session_state.user["username"]
-
-# -----------------------------------------------------------
-# ADMIN: quick security controls (only visible to admin)
-# -----------------------------------------------------------
-if role == "admin":
-    with st.sidebar.expander("🔒 Security Settings (Admin only)", expanded=False):
-        current = get_security_level()
-        new = st.selectbox("Security Level", ["low", "medium", "high"], index=["low","medium","high"].index(current))
-        if st.button("Save Security Level"):
-            set_security_level(new)
-            st.success(f"Security level set to: {new}")
-            # also reset login attempts when raising security, to avoid accidental lockouts
-            if new in ("medium","high"):
-                st.storage.write("login_attempts", {})
 
 # -----------------------------------------------------------
 # STUDENT PORTAL

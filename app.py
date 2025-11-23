@@ -58,71 +58,69 @@ def top_bar():
 def signup_ui():
     st.header("🆕 Create Account (Students require face photos)")
 
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        username = st.text_input("Choose Username", key="signup_username")
-        password = st.text_input("Choose Password", type="password", key="signup_password")
-        role = st.selectbox("Role", ["student", "teacher", "admin"], key="signup_role")
-        programme = st.text_input("Programme (Optional)", key="signup_programme")
-        student_class = st.text_input("Class (Optional)", key="signup_class")
+    username = st.text_input("Choose Username", key="signup_username")
+    password = st.text_input("Choose Password", type="password", key="signup_password")
+    role = st.selectbox("Role", ["student", "teacher", "admin"], key="signup_role")
+    programme = st.text_input("Programme (Optional)", key="signup_programme")
+    student_class = st.text_input("Class (Optional)", key="signup_class")
 
-    with col2:
-        if LOGO_PATH and st.button("Show Logo", key="signup_show_logo"):
-            st.image(LOGO_PATH, use_column_width=True)
-
-    # -----------------------------
-    # MULTI-IMAGE uploader for students
-    # -----------------------------
+    # -----------------------------------------
+    # MULTI-IMAGE SUPPORT FOR STUDENTS
+    # -----------------------------------------
     images = []
+
+    if "signup_captures" not in st.session_state:
+        st.session_state["signup_captures"] = []
 
     if role == "student":
         st.write("### 📸 Upload or Capture MULTIPLE Photos")
 
+        # ---------- Upload multiple ----------
         uploads = st.file_uploader(
-            "Upload 1 or more photos",
+            "Upload photos",
             type=["jpg", "png"],
             accept_multiple_files=True,
             key="signup_multi_upload"
         )
-
         if uploads:
-            for img_file in uploads:
-                images.append(load_image_from_bytes(img_file.getvalue()))
+            for f in uploads:
+                images.append(load_image_from_bytes(f.getvalue()))
 
-        st.write("### OR Capture Multiple Photos")
+        # ---------- Unlimited Captures ----------
+        st.write("### OR Capture Photos")
 
-        cap1 = st.camera_input("Capture Photo 1", key="signup_cap1")
-        if cap1:
-            images.append(load_image_from_bytes(cap1.getvalue()))
+        if st.button("Capture New Photo"):
+            new_cap = st.camera_input("Take Photo")
+            if new_cap:
+                st.session_state["signup_captures"].append(new_cap)
 
-        cap2 = st.camera_input("Capture Photo 2 (Optional)", key="signup_cap2")
-        if cap2:
-            images.append(load_image_from_bytes(cap2.getvalue()))
+        # Show all captured:
+        for idx, cap in enumerate(st.session_state["signup_captures"]):
+            st.image(cap, width=150, caption=f"Captured {idx+1}")
+            images.append(load_image_from_bytes(cap.getvalue()))
 
-    # -----------------------------
-    # CREATE ACCOUNT
-    # -----------------------------
+        # Option to clear captured:
+        if st.button("Clear Captured Photos"):
+            st.session_state["signup_captures"] = []
+
+    # -----------------------------------------
+    # CREATE ACCOUNT BUTTON
+    # -----------------------------------------
     if st.button("Create Account", key="signup_create"):
-        
-        # Basic validation
         if not username or not password:
             st.error("Username and password are required.")
             return
-        
-        # Student MUST submit at least one image
+
         if role == "student" and len(images) == 0:
-            st.error("Students must upload or capture at least ONE face photo.")
+            st.error("Students must upload or capture at least one photo.")
             return
 
-        # Create the login user
         ok, msg = create_user(username, password, role, programme, student_class)
         if not ok:
             st.error(msg)
             return
 
-        # -----------------------------------
-        # PROCESS STUDENT FACE IMAGES
-        # -----------------------------------
+        # -------- Extract embeddings --------
         if role == "student":
             embeddings = []
             for img in images:
@@ -131,10 +129,9 @@ def signup_ui():
                     embeddings.append(emb)
 
             if len(embeddings) == 0:
-                st.error("No valid face detected in any uploaded images.")
+                st.error("No valid faces detected.")
                 return
 
-            # Save all embeddings
             add_student(
                 sid=username,
                 name=username,
@@ -143,19 +140,18 @@ def signup_ui():
                 embeddings=embeddings
             )
 
-            st.success(f"Student registered successfully with {len(embeddings)} face samples!")
+            st.success(f"Student registered with {len(embeddings)} samples!")
 
         else:
             st.success("Account created successfully!")
 
-        # AUTO LOGIN
+        # auto login
         st.session_state.user = {
             "username": username,
             "role": role,
             "programme": programme,
             "class": student_class
         }
-
         st.session_state.show_signup = False
         return
 

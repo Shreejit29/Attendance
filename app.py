@@ -274,7 +274,7 @@ if mode == "Register Student":
 
                 if valid_faces == 0:
                     st.error("No valid faces detected in any image. Try again.")
-                return
+                    return
 
                 add_student(
                     sid=sid,

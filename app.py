@@ -207,31 +207,85 @@ mode = st.sidebar.selectbox("Choose Option", [
     "Dashboard",
     "Admin Panel"
 ])
-
-# ------ ADMIN: REGISTER STUDENT (FACE) ------
-if mode == "Register Student (Face)":
-    st.header("Register Student Using Face Photo")
+# ---------------------------------------------------------
+# REGISTER STUDENT (MULTI-IMAGE SUPPORT)
+# ---------------------------------------------------------
+if mode == "Register Student":
+    st.header("Register Student")
 
     name = st.text_input("Student Name")
     sid = st.text_input("Student ID")
-    programme = st.text_input("Programme")
-    student_class = st.text_input("Class")
 
-    upload = st.file_uploader("Upload Student Photo", type=["jpg","png"])
-    capture = st.camera_input("Or Capture Photo")
+    programme = st.selectbox("Programme", [
+        "BSc", "BA", "BCom", "MSc", "MA", "Custom"
+    ])
+    if programme == "Custom":
+        programme = st.text_input("Enter Programme")
 
-    if st.button("Register Student"):
-        src = capture or upload
-        if not src:
-            st.error("Upload or capture a photo.")
+    student_class = st.text_input("Class (e.g., FYBSc A, SYBCom B)")
+
+    st.write("### Upload Multiple Photos for Better Accuracy")
+    uploads = st.file_uploader(
+        "Upload 1 or more student photos",
+        type=["jpg", "png"],
+        accept_multiple_files=True
+    )
+
+    st.write("### OR Capture Multiple Photos")
+    capture = st.camera_input("Capture Photo")
+    more_caps = st.checkbox("Add another capture")
+
+    captured_images = []
+    if capture:
+        captured_images.append(capture)
+
+    # Allow second capture
+    if more_caps:
+        capture2 = st.camera_input("Capture Another Photo")
+        if capture2:
+            captured_images.append(capture2)
+
+    if st.button("Register"):
+        if not all([name, sid, programme, student_class]):
+            st.error("Please fill all fields.")
         else:
-            img = load_image_from_bytes(src.getvalue())
-            emb = get_face_embedding(img)
-            if emb is None:
-                st.error("No face detected.")
+            images = []
+
+            # Add uploaded images
+            if uploads:
+                for file in uploads:
+                    images.append(load_image_from_bytes(file.getvalue()))
+
+            # Add captured images
+            for cap in captured_images:
+                images.append(load_image_from_bytes(cap.getvalue()))
+
+            if len(images) == 0:
+                st.error("Please upload or capture at least one photo.")
             else:
-                add_student(sid, name, programme, student_class, emb)
-                st.success("Student registered successfully!")
+                embeddings = []
+                valid_faces = 0
+
+                for img in images:
+                    emb = get_face_embedding(img)
+                    if emb:
+                        embeddings.append(emb)
+                        valid_faces += 1
+
+                if valid_faces == 0:
+                    st.error("No valid faces detected in any image. Try again.")
+                    return
+
+                add_student(
+                    sid=sid,
+                    name=name,
+                    programme=programme,
+                    student_class=student_class,
+                    embedding=embeddings   # store ALL embeddings
+                )
+
+                st.success(f"Successfully registered {name} with {valid_faces} face samples.")
+
 
 # ------ ADMIN: IMAGE ATTENDANCE ------
 elif mode == "Take Attendance (Image)":

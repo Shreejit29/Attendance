@@ -1,38 +1,34 @@
-# manual_attendance.py
 import streamlit as st
 import pandas as pd
 
-def manual_attendance_ui(students, auto_present):
+def manual_attendance_ui(students, present_dict):
     """
-    students: list of dicts -> [{"id":..., "name":..., "embeddings":[...]}]
-    auto_present: dict -> {"student_id": True/False}
-
-    Returns updated attendance dataframe.
+    Creates a clean dataframe:
+    Student ID | Name | Present (Final)
+    Lets teacher/admin manually correct attendance.
     """
 
+    # Build dataframe in required format
     data = []
     for s in students:
         data.append({
             "Student ID": s["id"],
             "Name": s["name"],
-            "Present (Auto)": auto_present[s["id"]],
-            "Present (Final)": auto_present[s["id"]],
+            "Present (Final)": present_dict.get(s["id"], False)
         })
 
     df = pd.DataFrame(data)
 
+    st.write("### ✅ Verify & Correct Attendance")
     edited_df = st.data_editor(
         df,
-        column_config={
-            "Present (Final)": st.column_config.CheckboxColumn(
-                "Present",
-                help="Mark manually if automatic detection missed the student."
-            )
-        },
-        hide_index=True
+        num_rows="dynamic",
+        use_container_width=True
     )
 
-    final_df = edited_df[["Student ID", "Name", "Present (Final)"]]
-    final_df = final_df.rename(columns={"Present (Final)": "Present"})
+    # Ensure correct columns exist
+    if not all(col in edited_df.columns for col in ["Student ID", "Name", "Present (Final)"]):
+        st.error("Internal Error: Required columns missing.")
+        return df
 
-    return final_df
+    return edited_df

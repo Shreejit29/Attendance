@@ -1,88 +1,38 @@
+# dashboard.py (reads Excel history)
 import streamlit as st
 import pandas as pd
+import os
 
+HISTORY_DIR = "data/attendance_history"
 
 def dashboard_ui():
-    st.header("📊 Attendance Dashboard")
-
-    # ----------------------------------------
-    # Get all attendance keys from Storage API
-    # ----------------------------------------
-    keys = st.storage.list("attendance/")
-
-    if not keys:
-        st.info("No attendance records found.")
+    st.subheader("📊 Attendance Dashboard")
+    if not os.path.exists(HISTORY_DIR):
+        st.info("No attendance history found.")
         return
-
-    st.write(f"Found **{len(keys)}** attendance entries.")
-
-    # ----------------------------------------
-    # Load all attendance data
-    # ----------------------------------------
-    all_rows = []
-
-    for key in keys:
-        data = st.storage.read(key)
-        if data:
-            df = pd.DataFrame(data)
-            df["record_id"] = key
-            all_rows.append(df)
-
-    if not all_rows:
-        st.warning("Attendance storage found but contains no valid data.")
+    files = [f for f in os.listdir(HISTORY_DIR) if f.endswith(".xlsx")]
+    if not files:
+        st.info("No attendance records saved.")
         return
-
-    df = pd.concat(all_rows, ignore_index=True)
-
-    # ----------------------------------------
-    # Detect "Present" column
-    # ----------------------------------------
-    present_col = None
-    if "Present (Final)" in df.columns:
-        present_col = "Present (Final)"
-    elif "Present" in df.columns:
-        present_col = "Present"
-    else:
-        st.error("No 'Present' or 'Present (Final)' column in attendance data.")
-        return
-
-    # ----------------------------------------
-    # Display complete raw data
-    # ----------------------------------------
-    st.subheader("📁 All Attendance Data")
-    st.dataframe(df)
-
-    # ----------------------------------------
-    # Per-Student Attendance %
-    # ----------------------------------------
-    st.subheader("🧑‍🎓 Attendance % per Student")
-    per_student = df.groupby("Name")[present_col].mean().sort_values(ascending=False) * 100
-    st.bar_chart(per_student)
-
-    # ----------------------------------------
-    # Per-Class Attendance %
-    # ----------------------------------------
-    if "Class" in df.columns:
-        st.subheader("🏫 Attendance % per Class")
-        per_class = df.groupby("Class")[present_col].mean() * 100
-        st.bar_chart(per_class)
-
-    # ----------------------------------------
-    # Per-Subject Attendance %
-    # ----------------------------------------
-    if "Subject" in df.columns:
-        st.subheader("📚 Attendance % per Subject")
-        per_subject = df.groupby("Subject")[present_col].mean() * 100
-        st.bar_chart(per_subject)
-
-    # ----------------------------------------
-    # Trend Over Time
-    # ----------------------------------------
-    if "Time" in df.columns:
+    df_all = []
+    for f in files:
         try:
-            df["Time"] = pd.to_datetime(df["Time"])
-            df_sorted = df.sort_values("Time")
-            st.subheader("⏳ Attendance Trend Over Time")
-            st.line_chart(df_sorted.set_index("Time")[present_col])
+            df = pd.read_excel(os.path.join(HISTORY_DIR, f))
+            df_all.append(df)
         except:
-            st.info("Time column exists but could not be parsed.")
+            continue
+    if len(df_all) == 0:
+        st.info("No readable attendance records.")
+        return
+    df_all = pd.concat(df_all, ignore_index=True)
+    st.write("### All Attendance Data")
+    st.dataframe(df_all)
+    if "Present (Final)" in df_all.columns or "Present" in df_all.columns:
+        present_col = "Present (Final)" if "Present (Final)" in df_all.columns else "Present"
+        st.write("### Attendance Percentage per Student")
+        per_student = df_all.groupby("Name")[present_col].mean() * 100
+        st.bar_chart(per_student)
+        if "Class" in df_all.columns:
+            st.write("### Attendance Percentage per Class")
+            per_class = df_all.groupby("Class")[present_col].mean() * 100
+            st.bar_chart(per_class)

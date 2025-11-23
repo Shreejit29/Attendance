@@ -1,23 +1,18 @@
 import json
 import os
 
-STUDENTS_FILE = "students.json"
+STUDENTS_FILE = "data/students.json"
+ATTENDANCE_DIR = "data/attendance_history"
+
+os.makedirs("data", exist_ok=True)
+os.makedirs(ATTENDANCE_DIR, exist_ok=True)
+
 
 def load_students():
     if not os.path.exists(STUDENTS_FILE):
         return []
-
-    try:
-        with open(STUDENTS_FILE, "r") as f:
-            students = json.load(f)
-    except:
-        return []
-
-    for s in students:
-        s.setdefault("programme", "")
-        s.setdefault("class", "")
-        s.setdefault("embeddings", [])
-    return students
+    with open(STUDENTS_FILE, "r") as f:
+        return json.load(f)
 
 
 def save_students(students):
@@ -28,17 +23,6 @@ def save_students(students):
 def add_student(sid, name, programme, student_class, embedding):
     students = load_students()
 
-    # Update existing student
-    for s in students:
-        if s["id"] == sid:
-            s["name"] = name
-            s["programme"] = programme
-            s["class"] = student_class
-            s["embeddings"].append(embedding)
-            save_students(students)
-            return
-
-    # Add new student
     students.append({
         "id": sid,
         "name": name,
@@ -50,7 +34,7 @@ def add_student(sid, name, programme, student_class, embedding):
     save_students(students)
 
 
-def delete_student_by_id(student_id):
+def delete_student_by_id(sid):
     students = load_students()
-    updated = [s for s in students if s["id"] != student_id]
-    save_students(updated)
+    students = [s for s in students if s["id"] != sid]
+    save_students(students)

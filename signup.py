@@ -66,4 +66,5 @@ def signup_ui():
         st.session_state.user = {"username": username, "role": role, "programme": programme, "class": student_class}
         st.session_state.show_signup = False
         st.session_state["signup_captures"] = []
-        st.experimental_rerun()
+        st.rerun()
+

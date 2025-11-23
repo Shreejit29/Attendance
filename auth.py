@@ -1,41 +1,40 @@
-import json
-import os
+# auth.py  — Streamlit Storage API version (Permanent User Storage)
+
+import streamlit as st
 import hashlib
 
-# permanent storage location
-DATA_DIR = "data"
-USERS_FILE = os.path.join(DATA_DIR, "users.json")
 
-# ensure folders exist
-os.makedirs(DATA_DIR, exist_ok=True)
+# -------------------------------------------------------
+# INTERNAL HELPERS
+# -------------------------------------------------------
 
-# ensure file exists
-if not os.path.exists(USERS_FILE):
-    with open(USERS_FILE, "w") as f:
-        json.dump([], f)
-
-
-def load_users():
-    try:
-        with open(USERS_FILE, "r") as f:
-            return json.load(f)
-    except:
-        return []
-
-
-def save_users(users):
-    with open(USERS_FILE, "w") as f:
-        json.dump(users, f, indent=4)
-
-
-def hash_password(pwd):
+def hash_password(pwd: str) -> str:
+    """Hash the password using SHA-256."""
     return hashlib.sha256(pwd.encode()).hexdigest()
 
 
-def create_user(username, password, role, programme="", student_class=""):
-    users = load_users()
+def _load_users():
+    """Load all users from Streamlit Storage."""
+    users = st.storage.read("users")
+    if users is None:
+        return []   # return empty list initially
+    return users
 
-    # check if exists
+
+def _save_users(users):
+    """Save all users permanently."""
+    st.storage.write("users", users)
+
+
+# -------------------------------------------------------
+# PUBLIC FUNCTIONS
+# -------------------------------------------------------
+
+def create_user(username, password, role, programme="", student_class=""):
+    """Create a new user and store permanently."""
+    users = _load_users()
+
+    # check duplicate username
     for u in users:
         if u["username"] == username:
             return False, "Username already exists"
@@ -48,12 +47,13 @@ def create_user(username, password, role, programme="", student_class=""):
         "class": student_class
     })
 
-    save_users(users)
+    _save_users(users)
     return True, "User created successfully"
 
 
 def login_user(username, password):
-    users = load_users()
+    """Login user using hashed password verification."""
+    users = _load_users()
     hashed = hash_password(password)
 
     for u in users:

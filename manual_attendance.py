@@ -3,15 +3,11 @@ import pandas as pd
 
 def manual_attendance_ui(students, present_dict):
     """
-    DataFrame:
-        Student ID | Name | Present (Final)
-
-    Features:
-    ✔ Highlight Present (green)
-    ✔ Highlight Absent (red)
-    ✔ Separate Absent List
-    ✔ Summary count
-    ✔ Editable attendance
+    Creates clean editable attendance UI:
+    - Student ID | Name | Present (Final)
+    - Summary (Present/Absent count)
+    - Absent list separately
+    - Editable attendance table
     """
 
     # Build dataframe
@@ -50,23 +46,12 @@ def manual_attendance_ui(students, present_dict):
         st.warning("### ❌ Absent Students")
         st.dataframe(df_absent[["Student ID", "Name"]])
     else:
-        st.success("🎉 No absent students — ALL PRESENT!")
+        st.success("🎉 All students are present!")
 
     st.write("### ✏️ Verify & Correct Attendance Below")
 
     # --------------------------
-    # HIGHLIGHTING RULES
-    # --------------------------
-    def highlight_row(row):
-        if row["Present (Final)"]:
-            return ['background-color: #d4fcd4'] * len(row)   # light green
-        else:
-            return ['background-color: #ffcccc'] * len(row)   # light red
-
-    styled_df = df.style.apply(highlight_row, axis=1)
-
-    # --------------------------
-    # MAIN EDITOR
+    # MAIN EDITOR (NO STYLING)
     # --------------------------
     edited_df = st.data_editor(
         df,
@@ -76,8 +61,7 @@ def manual_attendance_ui(students, present_dict):
             "Present (Final)": st.column_config.CheckboxColumn(
                 help="Mark student present/absent"
             )
-        },
-        styled_dataframe=styled_df,   # 🔥 Highlighting applied
+        }
     )
 
     return edited_df

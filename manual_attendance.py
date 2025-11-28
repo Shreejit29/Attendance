@@ -1,13 +1,14 @@
+# manual_attendance.py
+
 import streamlit as st
 import pandas as pd
 
 def manual_attendance_ui(students, present_dict):
     """
-    Creates clean editable attendance UI:
-    - Student ID | Name | Present (Final)
-    - Summary (Present/Absent count)
-    - Absent list separately
-    - Editable attendance table
+    Creates a styled dataframe with:
+    - Green → Present
+    - Red → Absent
+    Also shows a separate ABSENT student list.
     """
 
     # Build dataframe
@@ -21,47 +22,40 @@ def manual_attendance_ui(students, present_dict):
 
     df = pd.DataFrame(data)
 
-    # --------------------------
-    # SUMMARY
-    # --------------------------
-    total_students = len(df)
-    present_count = df["Present (Final)"].sum()
-    absent_count = total_students - present_count
+    st.subheader("✏️ Verify & Correct Attendance Below")
 
-    st.markdown(
-        f"""
-        ### 📊 Attendance Summary  
-        - 👥 **Total Students:** {total_students}  
-        - ✅ **Present:** {present_count}  
-        - ❌ **Absent:** {absent_count}  
-        """
-    )
-
-    # --------------------------
-    # SEPARATE ABSENT LIST
-    # --------------------------
-    df_absent = df[df["Present (Final)"] == False]
-
-    if len(df_absent) > 0:
-        st.warning("### ❌ Absent Students")
-        st.dataframe(df_absent[["Student ID", "Name"]])
-    else:
-        st.success("🎉 All students are present!")
-
-    st.write("### ✏️ Verify & Correct Attendance Below")
-
-    # --------------------------
-    # MAIN EDITOR (NO STYLING)
-    # --------------------------
+    # --- Editable attendance (without color) ---
     edited_df = st.data_editor(
         df,
-        hide_index=True,
+        num_rows="dynamic",
         use_container_width=True,
-        column_config={
-            "Present (Final)": st.column_config.CheckboxColumn(
-                help="Mark student present/absent"
-            )
-        }
+        key="editor_attendance"
     )
+
+    # Keep only required columns
+    if not all(col in edited_df.columns for col in ["Student ID", "Name", "Present (Final)"]):
+        st.error("Internal Error: Required columns missing.")
+        return edited_df
+
+    st.write("---")
+    st.subheader("📌 Attendance Summary")
+
+    # List ABSENT students separately
+    absent_df = edited_df[edited_df["Present (Final)"] == False]
+
+    st.warning(f"❌ Absent Students: {len(absent_df)}")
+    st.dataframe(absent_df[["Student ID", "Name"]])
+
+    st.success(f"✅ Present Students: {len(edited_df) - len(absent_df)}")
+
+    # ---- Styling for final display ----
+    def highlight_row(row):
+        color = "background-color: #ffcccc" if row["Present (Final)"] is False else "background-color: #ccffcc"
+        return [color] * len(row)
+
+    styled_df = edited_df.style.apply(highlight_row, axis=1)
+
+    st.write("### 🔍 Highlighted Attendance Table")
+    st.dataframe(styled_df, use_container_width=True)
 
     return edited_df

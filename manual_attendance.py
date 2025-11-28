@@ -1,36 +1,83 @@
-# manual_attendance.py
 import streamlit as st
 import pandas as pd
 
-
 def manual_attendance_ui(students, present_dict):
-    rows = []
+    """
+    DataFrame:
+        Student ID | Name | Present (Final)
+
+    Features:
+    ✔ Highlight Present (green)
+    ✔ Highlight Absent (red)
+    ✔ Separate Absent List
+    ✔ Summary count
+    ✔ Editable attendance
+    """
+
+    # Build dataframe
+    data = []
     for s in students:
-        rows.append({
+        data.append({
             "Student ID": s["id"],
             "Name": s["name"],
-            "Present (Final)": bool(present_dict.get(s["id"], False))
+            "Present (Final)": present_dict.get(s["id"], False)
         })
-    df = pd.DataFrame(rows)
 
-    st.write("### ✅ Verify & Correct Attendance")
+    df = pd.DataFrame(data)
+
+    # --------------------------
+    # SUMMARY
+    # --------------------------
+    total_students = len(df)
+    present_count = df["Present (Final)"].sum()
+    absent_count = total_students - present_count
+
+    st.markdown(
+        f"""
+        ### 📊 Attendance Summary  
+        - 👥 **Total Students:** {total_students}  
+        - ✅ **Present:** {present_count}  
+        - ❌ **Absent:** {absent_count}  
+        """
+    )
+
+    # --------------------------
+    # SEPARATE ABSENT LIST
+    # --------------------------
+    df_absent = df[df["Present (Final)"] == False]
+
+    if len(df_absent) > 0:
+        st.warning("### ❌ Absent Students")
+        st.dataframe(df_absent[["Student ID", "Name"]])
+    else:
+        st.success("🎉 No absent students — ALL PRESENT!")
+
+    st.write("### ✏️ Verify & Correct Attendance Below")
+
+    # --------------------------
+    # HIGHLIGHTING RULES
+    # --------------------------
+    def highlight_row(row):
+        if row["Present (Final)"]:
+            return ['background-color: #d4fcd4'] * len(row)   # light green
+        else:
+            return ['background-color: #ffcccc'] * len(row)   # light red
+
+    styled_df = df.style.apply(highlight_row, axis=1)
+
+    # --------------------------
+    # MAIN EDITOR
+    # --------------------------
     edited_df = st.data_editor(
         df,
-        use_container_width=True,
-        num_rows="fixed",
         hide_index=True,
+        use_container_width=True,
         column_config={
             "Present (Final)": st.column_config.CheckboxColumn(
-                label="Present (Final)",
-                help="Check if present",
-                default=False
+                help="Mark student present/absent"
             )
-        }
+        },
+        styled_dataframe=styled_df,   # 🔥 Highlighting applied
     )
-    required_cols = ["Student ID", "Name", "Present (Final)"]
-    for col in required_cols:
-        if col not in edited_df.columns:
-            st.error(f"Internal Error: Column '{col}' missing.")
-            return df
-    edited_df["Present (Final)"] = edited_df["Present (Final)"].astype(bool)
+
     return edited_df

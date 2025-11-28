@@ -58,8 +58,25 @@ def cosine_similarity(a, b):
 
 def draw_boxes(img_rgb, boxes, labels):
     img = img_rgb.copy()
+
     for (x1, y1, x2, y2), name in zip(boxes, labels):
-        cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        cv2.putText(img, name, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6, (0, 255, 0), 2)
+
+        # 🔴 If unknown → red, otherwise → green
+        if name == "Unknown":
+            color = (255, 0, 0)   # Red
+        else:
+            color = (0, 255, 0)   # Green
+
+        cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
+
+        cv2.putText(
+            img,
+            name,
+            (x1, y1 - 10),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            color,
+            2
+        )
+
     return img

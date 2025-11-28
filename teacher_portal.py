@@ -28,9 +28,21 @@ def teacher_portal(username):
         if uploads:
             for f in uploads:
                 images.append(load_image_from_bytes(f.getvalue()))
-        for idx, cap in enumerate(st.session_state["teacher_captures"]):
-            st.image(cap, width=150, caption=f"Captured {idx+1}")
-            images.append(load_image_from_bytes(cap.getvalue()))
+        remove_indices = []
+
+        cols = st.columns(4)  # show 4 per row
+        for idx, cap in enumerate(st.session_state["signup_captures"]):
+            with cols[idx % 4]:
+                st.image(cap, width=150, caption=f"Photo {idx+1}")
+        
+                # ❌ Remove button
+                if st.button(f"Remove {idx+1}", key=f"remove_cap_{idx}"):
+                    remove_indices.append(idx)
+        
+        # Remove selected photos
+        for i in sorted(remove_indices, reverse=True):
+            del st.session_state["signup_captures"][i]
+
         if len(images) == 0:
             st.info("Upload or capture at least one image.")
             return
